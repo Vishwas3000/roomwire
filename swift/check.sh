@@ -68,4 +68,14 @@ swiftc $src/Packet.swift $src/Pointer.swift Checks/PointerCheck.swift -o "$out/p
 swiftc $src/Packet.swift $src/Chunk.swift $src/MediaSeal.swift Checks/MediaLaneCheck.swift -o "$out/medialane"
 "$out/medialane"
 
+# And the transport itself, over real Bonjour and real sockets, in one process:
+# two identities that have never met, a pairing code compared on both sides,
+# approval, refusal, fan-out, backpressure and a rejoin that asks nobody. This
+# is the one check that builds the package rather than compiling files, and the
+# one that needs a keychain — a temporary one, deleted at the end.
+#
+# It also needs Local Network permission for the terminal it runs in, because
+# Bonjour is how the viewers find the host. macOS asks once.
+swift run -c debug roomwire-lab selftest
+
 echo "swift: all checks passed"

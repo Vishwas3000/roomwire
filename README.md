@@ -11,9 +11,9 @@ that a difference between the two is a failing test today and not a corrupt
 frame on somebody's phone in three months.
 
 RoomWire is extracted from [ExtendPilot](https://extendpilot.com), which is its
-first consumer. It is early. The wire format and the four state machines below
-are complete and cross-checked; the transport — discovery, pairing, and the
-control and media lanes — is next.
+first consumer. It is early. The wire format and the state machines below are
+complete and cross-checked, and the Swift transport — discovery, pairing, and
+the two lanes — runs end to end. The Kotlin transport is next.
 
 ## What is here
 
@@ -24,6 +24,28 @@ control and media lanes — is next.
 | `Pacer` | `Pacer.swift` | `Pacer.kt` | When to show each frame: on the sender's clock, a fixed hold late, so jitter disappears and a stall reads as a freeze rather than a fast-forward. |
 | `CursorTrack` | `CursorMotion.swift` | `CursorMotion.kt` | Replaying a pointer sampled at 60 Hz and delivered unreliably, interpolating between positions the hand really visited. |
 | `PointerState` / `TouchIntent` | `Pointer.swift` | `Pointer.kt` | Both sides of a button-mask contract: a finger read into a mask on the viewer, a mask read into click and drag edges on the host. |
+| `ChunkHeader` / `Chunker` / `Reassembler` | `Chunk.swift` | `Chunk.kt` | Cutting a frame into datagrams of at most 1400 bytes and putting it back together — in order, never late, never with a hole in it. |
+| `MediaSeal` | `MediaSeal.swift` | `MediaSeal.kt` | The media lane's envelope: ChaCha20-Poly1305, the header as associated data, the lane derived from which end you are, and the replay window consulted only after the tag verifies. |
+| `Pairing` / `Framing` | `Pairing.swift` | `Pairing.kt` | The six characters both screens show, and the length prefix that makes a TCP byte stream into messages again. |
+| `Host` / `Viewer` | `RoomWireTransport/` | *next* | Discovery over Bonjour, pairing over mutual TLS, and the two lanes. Platform code: this is the half that owns sockets. |
+
+The transport is a second product, `RoomWireTransport`, and it depends on the
+first. `RoomWireProtocol` has no dependency of its own and is not allowed one —
+that is what keeps every check above runnable in a second on a laptop.
+
+## The lab tool
+
+```
+swift run roomwire-lab host --name "Lab Host" [--auto-approve]
+swift run roomwire-lab view [--host NAME | --first]
+swift run roomwire-lab selftest
+```
+
+A real host and a real viewer, driven from a terminal, over real Bonjour. The
+first two are how you watch two machines find each other; `selftest` is what
+`check.sh` runs — both ends in one process, against a temporary keychain it
+deletes afterwards. The terminal needs Local Network permission, which macOS
+asks for once.
 
 All of it is pure. No sockets, no clocks, no platform: time arrives as a
 parameter and the caller owns it. That is what lets a laptop run every check in

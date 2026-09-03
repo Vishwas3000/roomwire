@@ -73,7 +73,12 @@ public enum MediaSeal {
 
     /// The inbound half: bounds, then the tag, then — and only then — the
     /// replay window. One per receiving connection, one thread.
-    public struct Opener {
+    ///
+    /// A class and not a struct, because it owns the replay window. Value
+    /// semantics on a window is a way to duplicate one by accident — copy the
+    /// opener and each copy forgets what the other admitted — and a replay
+    /// window that can be forked is not one.
+    public final class Opener {
         private let key: SymmetricKey
         private let lane: UInt32
         private var window: ReplayWindow
@@ -87,7 +92,7 @@ public enum MediaSeal {
         /// nil for anything that does not open or has been seen before. The
         /// window is consulted last, so a forged counter costs an attacker
         /// nothing and buys them nothing.
-        public mutating func open(_ datagram: Data) -> (ChunkHeader.Fields, Data)? {
+        public func open(_ datagram: Data) -> (ChunkHeader.Fields, Data)? {
             guard let (fields, body) = MediaSeal.open(datagram, key: key, lane: lane) else { return nil }
             guard window.admit(fields.counter) else { return nil }
             return (fields, body)
