@@ -64,7 +64,13 @@ public final class Host: @unchecked Sendable {
     /// address, and a /24 is seven hundred and fifty attempts a minute. What is
     /// scarce is the presenter's attention, so that is what is rationed.
     private var invitePending = false
-    private var recentPrompts: [Date] = []
+    /// When each viewer last asked, by certificate fingerprint. Counted per
+    /// viewer rather than in total, because a person tapping join again is one
+    /// person and not five: a flat count turned a handful of honest retries
+    /// into a minute of silent refusals, with no prompt on the Mac and no
+    /// reason on the phone. Distinct certificates are still capped, which is
+    /// the case the limit is for.
+    private var recentPrompts: [Data: Date] = [:]
     private var refusingAll = false
 
     /// What this machine is called, clamped to what a `hello` can carry. A
@@ -267,11 +273,13 @@ public final class Host: @unchecked Sendable {
         }
         lock.lock()
         let now = Date()
-        recentPrompts.removeAll { now.timeIntervalSince($0) > 60 }
-        let refuse = refusingAll || invitePending || recentPrompts.count >= 5
+        recentPrompts = recentPrompts.filter { now.timeIntervalSince($0.value) <= 60 }
+        // A viewer already counted in this window is re-asking, not arriving.
+        let seenBefore = recentPrompts[session.fingerprint] != nil
+        let refuse = refusingAll || invitePending || (!seenBefore && recentPrompts.count >= 5)
         if !refuse {
             invitePending = true
-            recentPrompts.append(now)
+            recentPrompts[session.fingerprint] = now
         }
         lock.unlock()
         guard !refuse else { return drop(session) }
