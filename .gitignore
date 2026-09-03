@@ -1,0 +1,10 @@
+# Swift
+.build/
+*.xcodeproj
+.swiftpm/
+# Kotlin / Gradle
+kotlin/.gradle/
+kotlin/**/build/
+kotlin/local.properties
+kotlin/.kotlin/
+.DS_Store
