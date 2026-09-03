@@ -95,10 +95,25 @@ class ControlLane(
     fun close() {
         if (closed) return
         closed = true
-        try {
-            socket?.close()
-        } catch (e: IOException) {
-            // Already gone.
+        val doomed = socket
+        socket = null
+        // Closing an SSLSocket writes a close_notify alert, so it is network
+        // I/O and cannot run on the caller's thread: leave() arrives straight
+        // from a tap on Leave or Cancel, which is the main thread, and
+        // StrictMode kills the process for it.
+        //
+        // A plain thread rather than scope.launch, because close() is usually
+        // the last thing that happens before that scope is cancelled, and a
+        // coroutine that never runs leaves the socket open and the reader
+        // blocked on it forever.
+        if (doomed != null) {
+            Thread({
+                try {
+                    doomed.close()
+                } catch (e: IOException) {
+                    // Already gone.
+                }
+            }, "roomwire-control-close").start()
         }
         onClosed?.invoke()
     }
