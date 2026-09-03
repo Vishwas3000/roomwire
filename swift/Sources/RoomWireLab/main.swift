@@ -5,7 +5,7 @@ import RoomWireTransport
 // The lab tool: a real host and a real viewer, driven from a terminal.
 //
 //   roomwire-lab host --name "Lab Host" [--auto-approve] [--seconds N]
-//   roomwire-lab view [--host NAME | --first] [--name N] [--seconds N]
+//   roomwire-lab view [--host NAME | --first] [--name N] [--decode] [--seconds N]
 //   roomwire-lab selftest
 //
 // Arguments are parsed by hand. A dependency for six flags would be a
@@ -141,10 +141,17 @@ case "view":
         }
     }
     var frames = 0
+    // --decode runs arriving frames through the hardware decoder, which is what
+    // turns "bytes arrived" into "that was a picture". Worth the flag: when a
+    // phone shows black, this says on the Mac which half is at fault.
+    let decoder = flag("decode") ? Decoder() : nil
     viewer.onPacket = { data in
         if (data.first ?? 0xFF) <= 1, Packet.decode(data) != nil {
             frames += 1
-            if frames % 30 == 1 { print("  -> \(frames) frames") }
+            if let complaint = decoder?.admit(data) { print("  !! \(complaint)") }
+            if frames % 30 == 1 {
+                print("  -> \(frames) frames" + (decoder.map { ", \($0.summary)" } ?? ""))
+            }
         } else {
             print("  -> \(describe(data))")
         }
@@ -153,7 +160,8 @@ case "view":
     onInterrupt { viewer.leave(); print("\nleft") }
     DispatchQueue.main.asyncAfter(deadline: .now() + seconds(default: 3600)) {
         viewer.leave()
-        print("done — \(frames) frames")
+        decoder?.finish()
+        print("done — \(frames) frames" + (decoder.map { ", \($0.summary)" } ?? ""))
         exit(0)
     }
     dispatchMain()
@@ -163,7 +171,7 @@ default:
     roomwire-lab — the transport, driven from a terminal
 
       roomwire-lab host --name "Lab Host" [--auto-approve] [--seconds N]
-      roomwire-lab view [--host NAME | --first] [--name N] [--seconds N]
+      roomwire-lab view [--host NAME | --first] [--name N] [--decode] [--seconds N]
       roomwire-lab selftest
 
     Terminal needs Local Network permission for Bonjour to find anything.
