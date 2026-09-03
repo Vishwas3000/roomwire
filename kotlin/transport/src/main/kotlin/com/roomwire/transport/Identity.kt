@@ -70,7 +70,14 @@ class Identity private constructor(
             generator.initialize(
                 KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
                     .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-                    .setDigests(KeyProperties.DIGEST_SHA256)
+                    // DIGEST_NONE as well as SHA-256, and the NONE is the one
+                    // that matters: TLS hashes the handshake transcript itself
+                    // and hands the key a finished digest to sign raw, so
+                    // Conscrypt asks for NONEwithECDSA. A key minted for
+                    // SHA-256 alone refuses that with INCOMPATIBLE_DIGEST, and
+                    // the handshake dies at startHandshake() with nothing on
+                    // the wire to explain why.
+                    .setDigests(KeyProperties.DIGEST_NONE, KeyProperties.DIGEST_SHA256)
                     .setCertificateSubject(X500Principal("CN=RoomWire"))
                     // No user authentication requirement: a viewer that could
                     // only connect while the screen was unlocked and a finger
