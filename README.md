@@ -62,4 +62,21 @@ Swift Package Manager: add `swift/` as a package dependency and import
 
 ## Licence
 
-Apache-2.0.
+[PolyForm Shield 1.0.0](LICENSE). In plain terms: use it, change it, ship it,
+and sell what you build with it — for anything **except a product that competes
+with ExtendPilot, or with RoomLink itself**. That one carve-out is the whole
+licence. The text in `LICENSE` is short, readable, and controls over this
+paragraph; the definition of "competes" in it is deliberately broad, so if you
+are anywhere near the line, assume you are over it and ask.
+
+If what you want to build would compete, ask anyway. The licensor can grant a
+separate licence, and the door is open: open an issue, or reach the maintainer
+through [github.com/Vishwas3000](https://github.com/Vishwas3000).
+
+Because of that carve-out this is *source-available*, not open source in the
+OSI sense. Copies must carry `LICENSE` and the line in `NOTICE`.
+
+Contributions are welcome and will need a contributor licence agreement before
+they are merged, so that the licensor keeps the right to license the whole work
+on other terms. Until that exists, open an issue first rather than a pull
+request.
