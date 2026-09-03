@@ -38,14 +38,25 @@ import kotlin.math.sin
  *                       1 s, control granted at 3 s, and — given a [video]
  *                       fixture — frames paced by their own sentMs deltas
  *
+ * Two states an app has to draw are not on the happy path, so there are two
+ * ways to ask for them: [failNextJoin] makes the next join end in
+ * [ViewerState.Failed], and [hostChanged] makes the approval it reaches carry
+ * the certificate-changed warning. Both exist because the alternative is an
+ * app shipping those two screens unexercised.
+ *
  * @param approvalDelayMs how long the presenter takes to say yes.
  * @param video opens the fixture: `[u32 length][Packet bytes]` repeated. Called
  *   again each time it is looped or restarted, so it must open a fresh stream.
+ * @param hostChanged what [ViewerState.AwaitingApproval] reports. True is what
+ *   a host whose certificate is not the one we last saw looks like — and also
+ *   what a reinstalled Mac looks like, which is why it is a warning and not a
+ *   refusal. Settable afterwards too.
  */
 class FakeViewer(
     private val scope: CoroutineScope,
     private val approvalDelayMs: Long = 1500,
     private val video: (() -> InputStream)? = null,
+    var hostChanged: Boolean = false,
 ) : RoomWireViewer {
 
     private val _hosts = MutableStateFlow<List<DiscoveredHost>>(emptyList())
@@ -60,6 +71,18 @@ class FakeViewer(
     private var browsing: Job? = null
     private var joining: Job? = null
     private var session: FakeSession? = null
+    private var failWith: String? = null
+
+    /**
+     * Make the next [join] fail instead of connecting, with `reason` as the
+     * text. It fails where a real one does — after the approval wait, which is
+     * where a presenter declining lands — so a controller sees the same
+     * sequence it would see on a real refusal. One join per call: the failure
+     * is consumed, and the join after it behaves normally.
+     */
+    fun failNextJoin(reason: String = "declined") {
+        failWith = reason
+    }
 
     override fun startBrowsing() {
         // Valid from Failed, and from Browsing, and twice in a row: a viewer
@@ -67,6 +90,7 @@ class FakeViewer(
         // can hold in a view model.
         if (_state.value is ViewerState.Connected) return
         cancelJoin()
+
         _state.value = ViewerState.Browsing
         if (browsing?.isActive != true) {
             browsing = scope.launch {
@@ -88,8 +112,13 @@ class FakeViewer(
         _state.value = ViewerState.Connecting(host)
         joining = scope.launch {
             delay(100)
-            _state.value = ViewerState.AwaitingApproval(host, CODE, hostChanged = false)
+            _state.value = ViewerState.AwaitingApproval(host, CODE, hostChanged)
             delay(approvalDelayMs)
+            failWith?.let { reason ->
+                failWith = null
+                _state.value = ViewerState.Failed(reason)
+                return@launch
+            }
             val live = FakeSession(scope, sent, video)
             session = live
             _state.value = ViewerState.Connected(live)

@@ -144,6 +144,45 @@ class FakeViewerTest {
         assertInstanceOf(ViewerState.Connected::class.java, viewer.state.value)
     }
 
+    @Test
+    fun `a join can be made to fail, and browsing resumes from there`() = runTest {
+        val viewer = FakeViewer(backgroundScope)
+        viewer.startBrowsing()
+        advanceTimeBy(301)
+        val host = viewer.hosts.value.first()
+
+        viewer.failNextJoin("declined")
+        viewer.join(host, UUID.randomUUID(), "Pixel")
+        advanceTimeBy(101)
+        assertInstanceOf(ViewerState.AwaitingApproval::class.java, viewer.state.value)
+        advanceTimeBy(1500)
+        assertEquals(ViewerState.Failed("declined"), viewer.state.value)
+
+        // Failed is not a dead viewer: the way back is to look again.
+        viewer.startBrowsing()
+        assertEquals(ViewerState.Browsing, viewer.state.value)
+
+        // And the failure was consumed — the next join connects.
+        viewer.join(host, UUID.randomUUID(), "Pixel")
+        advanceTimeBy(1601)
+        assertInstanceOf(ViewerState.Connected::class.java, viewer.state.value)
+    }
+
+    @Test
+    fun `a changed host certificate reaches the approval state`() = runTest {
+        val viewer = FakeViewer(backgroundScope, hostChanged = true)
+        viewer.startBrowsing()
+        advanceTimeBy(301)
+        viewer.join(viewer.hosts.value.first(), UUID.randomUUID(), "Pixel")
+        advanceTimeBy(101)
+
+        val waiting = assertInstanceOf(ViewerState.AwaitingApproval::class.java, viewer.state.value)
+        assertTrue(waiting.hostChanged, "the warning a re-keyed host has to raise")
+        // It is a warning and not a refusal: approval still completes.
+        advanceTimeBy(1500)
+        assertInstanceOf(ViewerState.Connected::class.java, viewer.state.value)
+    }
+
     private fun hypotFromCentre(c: Packet.Message.Cursor): Double =
         kotlin.math.hypot(c.x - 0.5, c.y - 0.5)
 
