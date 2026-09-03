@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What the transport needs, declared here so an app that depends on it inherits
+  them rather than discovering them one failure at a time.
+
+  CHANGE_WIFI_MULTICAST_STATE is the one that is easy to miss and impossible to
+  diagnose: multicast is off by default to save the radio, DNS-SD is multicast,
+  and without the lock a browse simply finds nothing — no error, no callback,
+  no hint. ACCESS_WIFI_STATE is what lets us take the lock at all.
+
+  Nothing here is a runtime permission, so an app inherits all four and has
+  nothing to ask the user for. Discovery on a local network needs no location
+  permission: NsdManager is not one of the Wi-Fi APIs that can derive one.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+</manifest>

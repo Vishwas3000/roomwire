@@ -99,6 +99,29 @@ public struct Identity: @unchecked Sendable {
             attributes[kSecUseKeychain] = keychain
             keyAttributes[kSecUseKeychain] = keychain
         }
+        // An access list with no trusted applications on it, which means every
+        // application: without this, the key belongs to the exact binary that
+        // created it, and a rebuilt one asks the person at the machine for
+        // permission before it can sign.
+        //
+        // That failure is worth describing because it does not look like a
+        // keychain problem from outside. The prompt cannot appear for a
+        // command-line tool whose output is redirected, so the TLS handshake
+        // simply never completes and the far end reports "timed out" fifteen
+        // seconds later. Measured, on the second run after a rebuild.
+        //
+        // What is given up is real but small. On macOS this ACL gates other
+        // applications *running as the same logged-in user*; the key is still
+        // behind the keychain being unlocked and behind the user's own file
+        // permissions. Against that, the alternative is a modal dialog every
+        // time the binary changes, which for a device identity whose whole job
+        // is local screen sharing is the wrong trade — and a prompt nobody can
+        // answer is not a security control, it is a hang.
+        var access: SecAccess?
+        if SecAccessCreate("RoomWire \(label)" as CFString, nil, &access) == errSecSuccess,
+           let access {
+            keyAttributes[kSecAttrAccess] = access
+        }
         #endif
         attributes[kSecPrivateKeyAttrs] = keyAttributes as CFDictionary
         guard let stored = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {

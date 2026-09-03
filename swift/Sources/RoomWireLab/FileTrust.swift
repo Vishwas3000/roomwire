@@ -47,8 +47,14 @@ final class FileTrust: TrustStore, @unchecked Sendable {
     }
 }
 
-/// Approves everything, for `--auto-approve`. Never in an app.
-final class OpenDoor: TrustStore, @unchecked Sendable {
-    func isApproved(token: UUID, fingerprint: Data) -> Bool { true }
+/// Remembers nobody, so every viewer raises an invite.
+///
+/// This is what `--auto-approve` uses, and approving everything silently would
+/// have been the obvious thing and the wrong one: an invite is where the
+/// pairing code is printed, so a host that skipped it would show the operator
+/// nothing to compare against the phone. The flag says who answers, not whether
+/// anybody is asked.
+final class AlwaysAsk: TrustStore, @unchecked Sendable {
+    func isApproved(token: UUID, fingerprint: Data) -> Bool { false }
     func approve(token: UUID, fingerprint: Data, name: String) {}
 }

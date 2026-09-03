@@ -15,6 +15,11 @@ import RoomWireTransport
 // Terminal needs Local Network permission on macOS 15 for Bonjour to see
 // anything at all — it is granted once, in a dialog, on the first run.
 
+// Line buffering, because this tool's whole job is to put a pairing code in
+// front of somebody. Redirected to a file or a pager, stdout is block-buffered
+// and the code appears when the process exits, which is exactly too late.
+setvbuf(stdout, nil, _IOLBF, 0)
+
 let arguments = Array(CommandLine.arguments.dropFirst())
 
 func flag(_ name: String) -> Bool { arguments.contains("--\(name)") }
@@ -49,7 +54,7 @@ case "host":
     let name = option("name") ?? "Lab Host"
     let auto = flag("auto-approve")
     let store = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".roomwire-lab/trust.json")
-    let trust: any TrustStore = auto ? OpenDoor() : FileTrust(url: store)
+    let trust: any TrustStore = auto ? AlwaysAsk() : FileTrust(url: store)
     let identity: Identity
     do {
         identity = try Identity.load(label: "roomwire-lab-host")
@@ -59,7 +64,7 @@ case "host":
     }
     let host = Host(name: name, identity: identity, trust: trust)
     print("host \"\(Packet.clampName(name))\"  fingerprint \(identity.fingerprint.hexString)")
-    print(auto ? "auto-approving every viewer" : "trust file \(store.path)")
+    print(auto ? "auto-approving every viewer — the code is still shown" : "trust file \(store.path)")
 
     host.onInvite = { invite in
         print("\n  \(invite.peer.displayName) wants to join")
