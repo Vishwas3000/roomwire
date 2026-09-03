@@ -464,19 +464,57 @@ object Packet {
         return out.toByteArray() + mediaKey + hostFingerprint
     }
 
-    /** UTF-8 of [name], at most [MAX_NAME_BYTES], cut between code points; "?" if empty. */
-    internal fun nameBytes(name: String): ByteArray {
-        val out = java.io.ByteArrayOutputStream()
+    /**
+     * The display-name rule, and it lives here because the wire has one rule
+     * and two ends have to obey it.
+     *
+     * [Message.Hello] carries a name as 1…63 bytes of UTF-8, so a name that
+     * does not fit in 63 bytes is not a name RoomWire can send at all. A
+     * platform's own idea of a device name is no help: a Mac's is a String of
+     * any length, and forty *characters* of it can be a hundred and sixty
+     * bytes. So this is where a name is made to fit — trimmed, then whole code
+     * points dropped from the end until the UTF-8 fits.
+     *
+     * Whole code points, never a cut inside one. Truncating by UTF-16 units
+     * splits a surrogate pair, and a lone surrogate encodes to `?` or U+FFFD
+     * depending on who does the encoding; truncating by bytes splits a
+     * character and produces bytes the far end must refuse, which turns a long
+     * name into a refused connection. Dropping the whole character is the only
+     * answer both languages can give.
+     *
+     * The trimmed set is spelled out rather than taken from [String.trim],
+     * because the platforms differ — Foundation counts U+00A0 as whitespace and
+     * java.lang.Character does not — and a contract cannot have two answers.
+     *
+     * A name that is empty after trimming reads as `?`. The format needs at
+     * least one byte, and a blank line where a device name should be is worse
+     * to look at than a placeholder.
+     *
+     * An app is free to show a shorter limit in its text field — "40
+     * characters" reads better to a person than "63 bytes" — but that is a hint
+     * to a typist. This is the rule.
+     */
+    fun clampName(name: String): String {
+        val trimmed = name.trim { it in WHITESPACE }
+        val out = StringBuilder()
+        var bytes = 0
         var i = 0
-        while (i < name.length) {
-            val cp = name.codePointAt(i)
-            val bytes = String(Character.toChars(cp)).toByteArray(StandardCharsets.UTF_8)
-            if (out.size() + bytes.size > MAX_NAME_BYTES) break
-            out.write(bytes)
+        while (i < trimmed.length) {
+            val cp = trimmed.codePointAt(i)
+            val chars = Character.toChars(cp)
+            val width = String(chars).toByteArray(StandardCharsets.UTF_8).size
+            if (bytes + width > MAX_NAME_BYTES) break
+            out.append(chars)
+            bytes += width
             i += Character.charCount(cp)
         }
-        return if (out.size() == 0) byteArrayOf(0x3F) else out.toByteArray()
+        return if (out.isEmpty()) "?" else out.toString()
     }
+
+    /** Space, tab, newline, carriage return, vertical tab, form feed. Nothing else. */
+    private const val WHITESPACE = " \t\n\r\u000B\u000C"
+
+    internal fun nameBytes(name: String): ByteArray = clampName(name).toByteArray(StandardCharsets.UTF_8)
 
     /** null for anything that is not well-formed UTF-8; String(bytes) would quietly substitute. */
     private fun strictUtf8(b: ByteArray, from: Int, to: Int): String? = try {

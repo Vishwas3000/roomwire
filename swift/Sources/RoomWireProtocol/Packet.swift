@@ -346,16 +346,51 @@ public enum Packet {
         return out
     }
 
-    /// UTF-8 of `name`, at most `maxNameBytes`, cut between scalars; "?" if empty.
-    static func nameBytes(_ name: String) -> [UInt8] {
-        var out: [UInt8] = []
-        for scalar in name.unicodeScalars {
-            let bytes = Array(String(scalar).utf8)
-            if out.count + bytes.count > maxNameBytes { break }
-            out += bytes
+    /// The display-name rule, and it lives here because the wire has one rule
+    /// and two ends have to obey it.
+    ///
+    /// `hello` carries a name as 1…63 bytes of UTF-8, so a name that does not
+    /// fit in 63 bytes is not a name RoomWire can send at all. A platform's own
+    /// idea of a device name is no help: a Mac's is a `String` of any length,
+    /// and forty *characters* of it can be a hundred and sixty bytes. So this is
+    /// where a name is made to fit — trimmed, then whole code points dropped
+    /// from the end until the UTF-8 fits.
+    ///
+    /// Whole code points, never a cut inside one. A truncation that lands in
+    /// the middle of a multi-byte character produces bytes the far end must
+    /// refuse, which turns a long name into a refused connection; on the JVM it
+    /// produces a lone surrogate, which encodes as `?` or U+FFFD depending on
+    /// who does it. Dropping the whole character is the only answer both
+    /// languages can give.
+    ///
+    /// The trimmed set is spelled out rather than taken from either platform's
+    /// notion of whitespace, because those differ — Foundation counts U+00A0 as
+    /// whitespace and `java.lang.Character` does not, and a contract cannot
+    /// have two answers.
+    ///
+    /// A name that is empty after trimming reads as `?`. The format needs at
+    /// least one byte, and a blank line where a device name should be is worse
+    /// to look at than a placeholder.
+    ///
+    /// An app is free to show a shorter limit in its text field — "40
+    /// characters" reads better to a person than "63 bytes" — but that is a
+    /// hint to a typist. This is the rule.
+    public static func clampName(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: whitespace)
+        var out = "", bytes = 0
+        for scalar in trimmed.unicodeScalars {
+            let width = String(scalar).utf8.count
+            if bytes + width > maxNameBytes { break }
+            out.unicodeScalars.append(scalar)
+            bytes += width
         }
-        return out.isEmpty ? [0x3F] : out
+        return out.isEmpty ? "?" : out
     }
+
+    /// Space, tab, newline, carriage return, vertical tab, form feed. Nothing else.
+    static let whitespace = CharacterSet(charactersIn: " \t\n\r\u{0B}\u{0C}")
+
+    static func nameBytes(_ name: String) -> [UInt8] { Array(clampName(name).utf8) }
 
     /// Two big-endian floats at `o`. Network input: a hostile coordinate would
     /// park a layer at infinity, so anything off the unit square is refused.

@@ -31,7 +31,7 @@ class PacketVectorsTest {
         }
         // A short read must fail loudly rather than report a green suite over
         // half the format.
-        assertEquals(127, rows.size, "expected 127 vectors, parsed ${rows.size}")
+        assertEquals(133, rows.size, "expected 133 vectors, parsed ${rows.size}")
 
         return rows.map { (name, verdict, hex) ->
             DynamicTest.dynamicTest("$verdict $name") { check(name, verdict, unhex(hex)) }
@@ -198,6 +198,16 @@ class PacketVectorsTest {
         // string form spells — so both sides can key a trust store by the string.
         "hello" -> Packet.encodeHello(token, 0xC001u, "Ada’s Pixel")
         "hello.longName" -> Packet.encodeHello(token, 1u, "n".repeat(63))
+        // A name is made to fit by the protocol, not by whatever the platform
+        // stored. Forty emoji is 160 bytes; the clamp drops whole characters
+        // until it fits, which is fifteen of them — a UTF-16 truncation would
+        // split a surrogate pair here and a byte truncation would split a
+        // character, and both produce a hello the far end must refuse.
+        "hello.clamped.emoji" -> Packet.encodeHello(token, 1u, "\uD83D\uDE00".repeat(40))
+        "hello.clamped.exactly63" -> Packet.encodeHello(token, 1u, "é".repeat(31) + "a")
+        "hello.clamped.overByOne" -> Packet.encodeHello(token, 1u, "é".repeat(32))
+        "hello.clamped.trimmed" -> Packet.encodeHello(token, 1u, "  Ada's Mac \t\n")
+        "hello.clamped.blank" -> Packet.encodeHello(token, 1u, " \t\r\n ")
         "welcome" -> Packet.encodeWelcome(0xD002u, mediaKey, ByteArray(32) { (0x40 + it).toByte() })
 
         "chunk.video" -> ChunkHeader.encode(videoFields)

@@ -224,6 +224,22 @@ enum PacketVectors {
         // string form spells — so both sides can key a trust store by the string.
         encode("hello", Packet.encodeHello(token: token, udpPort: 0xC001, name: "Ada’s Pixel"))
         encode("hello.longName", Packet.encodeHello(token: token, udpPort: 1, name: String(repeating: "n", count: 63)))
+        // A name is made to fit by the protocol, not by whatever the platform
+        // happened to store. Forty emoji is 160 bytes and cannot be sent; the
+        // clamp drops whole characters until it can, which is fifteen of them.
+        encode("hello.clamped.emoji", Packet.encodeHello(token: token, udpPort: 1,
+                                                          name: String(repeating: "😀", count: 40)))
+        // Exactly 63 bytes of multi-byte text survives untouched…
+        encode("hello.clamped.exactly63", Packet.encodeHello(token: token, udpPort: 1,
+                                                              name: String(repeating: "é", count: 31) + "a"))
+        // …and one byte more loses a whole character, not half of one. Cutting
+        // at byte 63 here would split an "é" and produce a hello the far end
+        // must refuse.
+        encode("hello.clamped.overByOne", Packet.encodeHello(token: token, udpPort: 1,
+                                                              name: String(repeating: "é", count: 32)))
+        encode("hello.clamped.trimmed", Packet.encodeHello(token: token, udpPort: 1, name: "  Ada's Mac \t\n"))
+        // Nothing left after trimming: the format needs a byte, so it is "?".
+        encode("hello.clamped.blank", Packet.encodeHello(token: token, udpPort: 1, name: " \t\r\n "))
         encode("welcome", Packet.encodeWelcome(udpPort: 0xD002, mediaKey: mediaKey,
                                                hostFingerprint: Data((0x40 ..< 0x60).map(UInt8.init))))
     }
@@ -354,6 +370,11 @@ enum PacketVectors {
         reject("hello.emptyName", helloHead + Data([0]))
         reject("hello.nameTooLong", helloHead + Data([64]) + Data(repeating: 0x6E, count: 64))
         reject("hello.badUtf8", helloHead + Data([2, 0xFF, 0xFE]))
+        // ED A0 80 is how a lone high surrogate (U+D800) would be spelled if
+        // UTF-8 allowed it, which it does not. Both decoders must refuse it
+        // rather than substitute — this is the shape a name truncated by UTF-16
+        // units arrives in, and it is the reason the clamp counts code points.
+        reject("hello.surrogateInUtf8", helloHead + Data([3, 0xED, 0xA0, 0x80]))
         reject("hello.lengthDisagrees", helloHead + Data([5]) + Data(repeating: 0x6E, count: 6))
         reject("hello.port0", Data([19]) + Data(repeating: 0x0F, count: 16) + Data([0, 0, 1, 0x6E]))
         reject("hello.short", helloHead)
