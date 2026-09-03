@@ -32,6 +32,16 @@ public final class Host: @unchecked Sendable {
     public var onPacket: ((Peer, Data) -> Void)?
     /// This peer's in-flight count reached zero.
     public var onDrained: ((Peer) -> Void)?
+    /// The listener stopped, before or after it came up. `start()` returning
+    /// is not the same as this host being reachable: `NWListener` reports
+    /// almost everything that can go wrong — a refused Bonjour registration,
+    /// a local-network denial, a TLS identity it cannot use — asynchronously,
+    /// long after `start()` has returned. Without this a host that never
+    /// listened is indistinguishable from one nobody has joined yet.
+    public var onFailed: ((Error) -> Void)?
+    /// True once the listener is `.ready`. Answers "is this host actually
+    /// reachable" without waiting for someone to try.
+    public private(set) var listening = false
 
     /// Whether video ignores `mode` and always takes the media lane.
     ///
@@ -78,6 +88,20 @@ public final class Host: @unchecked Sendable {
                                               txtRecord: NWTXTRecord(["v": "\(Bonjour.version)",
                                                                       "name": name]))
         listener.newConnectionHandler = { [weak self] connection in self?.adopt(connection) }
+        listener.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                self.listening = true
+            case .failed(let error):
+                self.listening = false
+                self.onFailed?(error)
+            case .cancelled:
+                self.listening = false
+            default:
+                break
+            }
+        }
         listener.start(queue: queue)
         self.listener = listener
     }
