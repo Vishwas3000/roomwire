@@ -192,21 +192,56 @@ public enum Packet {
         /// Three fingers, meaning what they mean on a trackpad.
         case systemGesture(SystemGesture)                               // viewer -> host
         /// The first frame on the control lane, within five seconds of TLS
-        /// coming up. `token` is the viewer's pairing identity — the key the
-        /// host's trust store is indexed by — and `udpPort` is where the
-        /// viewer is already listening for the media lane: the host dials it,
-        /// so no viewer ever needs a listener the host can find. Port 0 dials
-        /// nowhere and is refused. The name is 1…63 bytes of UTF-8, shown to
-        /// the presenter when asked to approve; more than that is truncated on
-        /// the way out and refused on the way in.
-        case hello(token: UUID, udpPort: UInt16, name: String)          // viewer -> host
+        /// coming up.
+        ///
+        /// `commitment` is SHA-256 of a token the viewer has *not* sent yet.
+        /// That ordering is the whole point and it is what makes six characters
+        /// enough — see `Pairing.code`. The token itself arrives later, in
+        /// `reveal`, and the host tears the connection down if it does not hash
+        /// to this.
+        ///
+        /// The token is **not** an identity and nothing may be keyed on it. It
+        /// is a fresh random per attempt whose only job is to be committed to
+        /// and then revealed. What identifies a peer is
+        /// SHA-256 of its certificate, which is the only thing TLS actually
+        /// proved anything about.
+        ///
+        /// `udpPort` is where the viewer is already listening for the media
+        /// lane: the host dials it, so no viewer ever needs a listener the host
+        /// can find. Port 0 dials nowhere and is refused. The name is 1…63
+        /// bytes of UTF-8, shown to the presenter when asked to approve; more
+        /// than that is truncated on the way out and refused on the way in.
+        case hello(commitment: Data, udpPort: UInt16, name: String)     // viewer -> host
         /// The host's answer, sent only once the viewer is approved: where the
-        /// host's own end of the media lane sits, a fresh 32-byte key for that
-        /// lane — one per viewer, because a shared key with independent
-        /// counters would reuse a nonce — and the SHA-256 of the host's own
-        /// certificate, which the viewer checks against the one TLS actually
-        /// showed it.
+        /// host's own end of the media lane sits, a **fresh 32-byte key per
+        /// session**, and the SHA-256 of the host's own certificate.
+        ///
+        /// Fresh per session, and never cached against a remembered viewer. A
+        /// key that outlives its control connection is a key used twice with
+        /// counters that restart at 1 — the same keystream over two different
+        /// frames, which XORs to plaintext, and the Poly1305 block with it, so
+        /// it is forgery and not merely disclosure. An attacker who can reset
+        /// the cleartext TCP connection chooses when that happens, and a phone
+        /// going to sleep does it unprompted. So: minted in every `welcome`,
+        /// destroyed when the control lane closes.
+        ///
+        /// `hostFingerprint` is a cross-check and not a source. The viewer
+        /// already has the host's fingerprint from the TLS handshake — it needs
+        /// it before this message arrives, to show the pairing code while
+        /// approval is still pending — so this field must be *compared* against
+        /// that and the session torn down if it differs. Adopting the value
+        /// from here would be trusting the thing being checked.
         case welcome(udpPort: UInt16, mediaKey: Data, hostFingerprint: Data) // host -> viewer
+        /// Sixteen fresh bytes from the host, sent before approval so the
+        /// viewer can show the code while the presenter is still deciding.
+        ///
+        /// This is the host's half of the pairing code, and it arrives after
+        /// the viewer has already committed. Without it the code is a value one
+        /// side gets to choose last, which is not a comparison of anything.
+        case hostNonce(Data)                                            // host -> viewer
+        /// The token `hello` committed to. The host hashes it, checks it
+        /// against the commitment, and closes on a mismatch.
+        case reveal(token: UUID)                                        // viewer -> host
     }
 
     /// The most a display name may occupy on the wire, in UTF-8 bytes.
@@ -305,34 +340,61 @@ public enum Packet {
             // exactly what it claims, the port must dial somewhere, and the
             // name must be text — a byte sequence that is not UTF-8 is not a
             // name we can show anyone.
-            guard b.count >= 20, (1 ... maxNameBytes).contains(Int(b[19])),
-                  b.count == 20 + Int(b[19]) else { return nil }
-            let port = be16(b, 17)
-            guard port != 0, let name = String(validating: b[20...], as: UTF8.self) else { return nil }
-            let token = Data(b[1 ... 16]).withUnsafeBytes { UUID(uuid: $0.load(as: uuid_t.self)) }
-            return .hello(token: token, udpPort: port, name: name)
+            guard b.count >= 36, (1 ... maxNameBytes).contains(Int(b[35])),
+                  b.count == 36 + Int(b[35]) else { return nil }
+            let port = be16(b, 33)
+            guard port != 0, let name = String(validating: b[36...], as: UTF8.self) else { return nil }
+            return .hello(commitment: Data(b[1 ..< 33]), udpPort: port, name: name)
         case 20:
             let b = [UInt8](data)
             guard b.count == 67 else { return nil }
             let port = be16(b, 1)
             guard port != 0 else { return nil }
             return .welcome(udpPort: port, mediaKey: Data(b[3 ..< 35]), hostFingerprint: Data(b[35 ..< 67]))
+        case 21:
+            let b = [UInt8](data)
+            guard b.count == 17 else { return nil }
+            return .hostNonce(Data(b[1 ..< 17]))
+        case 22:
+            let b = [UInt8](data)
+            guard b.count == 17 else { return nil }
+            return .reveal(token: uuid(b, 1))
         default:
             return nil
         }
     }
 
-    /// The name is cut to `maxNameBytes` of UTF-8 on a scalar boundary, so a
-    /// long name loses its tail rather than the whole hello being refused at
-    /// the far end. An empty name reads as "?": the format needs one byte.
-    public static func encodeHello(token: UUID, udpPort: UInt16, name: String) -> Data {
+    /// `commitment` is 32 bytes — `Pairing.commitment(for:)` makes one. The
+    /// name is cut to `maxNameBytes` of UTF-8 on a scalar boundary, so a long
+    /// name loses its tail rather than the whole hello being refused at the far
+    /// end. An empty name reads as "?": the format needs one byte.
+    public static func encodeHello(commitment: Data, udpPort: UInt16, name: String) -> Data {
+        precondition(commitment.count == 32, "a commitment is SHA-256, which is 32 bytes")
         var out = Data([19])
-        out.append(contentsOf: withUnsafeBytes(of: token.uuid) { [UInt8]($0) })
+        out += commitment
         out.appendBE16(udpPort)
         let name = nameBytes(name)
         out.append(UInt8(name.count))
         out.append(contentsOf: name)
         return out
+    }
+
+    /// Sixteen bytes, and they must be fresh for every viewer that connects.
+    public static func encodeHostNonce(_ nonce: Data) -> Data {
+        precondition(nonce.count == 16, "a host nonce is 16 bytes")
+        return Data([21]) + nonce
+    }
+
+    public static func encodeReveal(token: UUID) -> Data {
+        var out = Data([22])
+        out.append(contentsOf: withUnsafeBytes(of: token.uuid) { [UInt8]($0) })
+        return out
+    }
+
+    /// Sixteen bytes at `o` as a UUID, in RFC 4122 order — the same bytes its
+    /// string form spells.
+    static func uuid(_ b: [UInt8], _ o: Int) -> UUID {
+        Data(b[o ..< o + 16]).withUnsafeBytes { UUID(uuid: $0.load(as: uuid_t.self)) }
     }
 
     /// `mediaKey` and `hostFingerprint` are 32 bytes each; anything else is a

@@ -38,9 +38,12 @@ class TranscriptsTest {
             Row(f[0], f[1], f[2], f[3], f[4], line)
         }
         // A short read must fail loudly rather than pass over half the machines.
-        assertEquals(266, rows.size, "expected 266 steps, parsed ${rows.size}")
+        assertEquals(303, rows.size, "expected 303 steps, parsed ${rows.size}")
         assertEquals(
-            setOf("chaingate", "pacer", "cursor", "pointer", "touch", "reassembler", "replay"),
+            setOf(
+                "chaingate", "pacer", "cursor", "pointer", "touch",
+                "reassembler", "replay", "opener", "framing",
+            ),
             rows.map { it.machine }.toSet(),
             "every machine must appear — a missing one is an unported file",
         )
@@ -70,6 +73,8 @@ class TranscriptsTest {
         "touch" -> TouchReplay()
         "reassembler" -> ReassemblerReplay()
         "replay" -> ReplayWindowReplay()
+        "opener" -> OpenerReplay()
+        "framing" -> FramingReplay()
         else -> fail("no replayer for machine '$machine'")
     }
 
@@ -165,9 +170,7 @@ class TranscriptsTest {
                 val index = a.u16("index")
                 val body = ByteArray(a.getValue("len").toInt()) { k -> (id.toLong() + index.toInt() + k).toByte() }
                 val h = ChunkHeader.Fields(ChunkHeader.Kind.VIDEO, 0uL, id, index, a.u16("count"))
-                r.absorb(h, body, a.d("now"))?.let {
-                    "delivered len=${it.size} sum=${it.fold(0) { s, b -> (s + (b.toInt() and 0xFF)) and 0xFFFF }}"
-                } ?: "nil"
+                r.absorb(h, body, a.d("now"))?.let { "delivered len=${it.size} sum=${digest(it)}" } ?: "nil"
             }
             else -> fail("reassembler: unknown op $op")
         }
@@ -181,7 +184,67 @@ class TranscriptsTest {
         }
     }
 
+    /**
+     * The ordering rule, replayed: bounds, then the tag, then the replay
+     * window. The forgedSprayThenReal scenario is the one that matters — five
+     * forged datagrams must not consume the counters they claim, or an attacker
+     * sending nothing but noise blacks out the stream.
+     */
+    private class OpenerReplay : Replayer {
+        val key = ByteArray(32) { it.toByte() }
+        var role: MediaSeal.Role? = null
+        var o: MediaSeal.Opener? = null
+        override fun step(op: String, a: Map<String, String>) = when (op) {
+            "open" -> {
+                // The role is on every line, and the first one makes the opener:
+                // a scenario is one end of one lane for its whole length.
+                val want = if (a.getValue("role") == "host") MediaSeal.Role.HOST else MediaSeal.Role.VIEWER
+                if (o == null) { role = want; o = MediaSeal.Opener(key, want) }
+                check(role == want) { "an opener changed role mid-scenario" }
+                val counter = a.getValue("counter").toULong()
+                val tamper = a.getValue("tamper")
+                val len = a.getValue("len").toInt()
+                val body = ByteArray(len) { (counter.toLong() + it).toByte() }
+                val fields = ChunkHeader.Fields(ChunkHeader.Kind.VIDEO, counter, 1u, 0u, 1u)
+                // The lane comes from the file as a literal, never derived
+                // from the role here: deriving it would use the same mapping
+                // the Opener uses and cancel out a mistake in exactly that
+                // mapping. The contract says which lane the bytes are on.
+                val d = MediaSeal.seal(fields, body, key, a.getValue("lane").toUInt())
+                if (tamper == "tag") d[d.size - 1] = (d[d.size - 1].toInt() xor 1).toByte()
+                if (tamper == "header") d[9] = (d[9].toInt() xor 1).toByte()
+                o!!.open(d)?.let {
+                    "delivered counter=${it.first.counter} len=${it.second.size} sum=${digest(it.second)}"
+                } ?: "refused"
+            }
+            else -> fail("opener: unknown op $op")
+        }
+    }
+
+    private class FramingReplay : Replayer {
+        val d = Framing.Decoder()
+        override fun step(op: String, a: Map<String, String>) = when (op) {
+            "feed" -> {
+                val hex = a.getValue("bytes")
+                val bytes = ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+                d.feed(bytes)?.let { frames ->
+                    if (frames.isEmpty()) "none"
+                    else frames.joinToString(";") { "frame len=${it.size} sum=${digest(it)}" }
+                } ?: "violation"
+            }
+            else -> fail("framing: unknown op $op")
+        }
+    }
+
     private companion object {
+        /**
+         * Order-sensitive on purpose. A plain byte sum is not: a reassembler
+         * that concatenates slices in *arrival* order rather than index order
+         * passes every line in the file exactly, while handing the decoder
+         * scrambled H.264.
+         */
+        fun digest(b: ByteArray): Int = b.fold(0) { s, x -> (s * 31 + (x.toInt() and 0xFF)) and 0xFFFF }
+
         /**
          * Six decimals, rounded half-even on the exact binary value — which is
          * what C's printf does on the Swift side. String.format would round

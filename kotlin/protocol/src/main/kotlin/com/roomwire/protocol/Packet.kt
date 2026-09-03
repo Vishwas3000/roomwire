@@ -167,7 +167,14 @@ object Packet {
      * paired timelines, 14 a controlling viewer's pointer, 15 its scrolling,
      * 16 a viewer asking for control, 17 the presenter's answer, 18 a
      * three-finger gesture, 19 a viewer introducing itself to the transport,
-     * 20 the transport's answer once the viewer is admitted.
+     * 20 the transport's answer once the viewer is admitted, 21 the host's
+     * pairing nonce, 22 the viewer revealing what it committed to.
+     *
+     * Id 23 is reserved for a second version of [Message.Hello]. A viewer
+     * learns the host's protocol version from the Bonjour TXT record —
+     * DiscoveredHost carries it — *before* it connects, so it picks which hello
+     * to send and a new id is how v2 announces itself. There is no version byte
+     * in the handshake and there does not need to be one.
      *
      * Coordinates are always normalized within the watched screen, so they
      * survive any difference in resolution or zoom between the two ends.
@@ -300,24 +307,69 @@ object Packet {
 
         /**
          * viewer -> host. The first frame on the control lane, within five
-         * seconds of TLS coming up. [token] is the viewer's pairing identity —
-         * the key the host's trust store is indexed by — and [udpPort] is where
-         * the viewer is already listening for the media lane: the host dials
-         * it, so no viewer ever needs a listener the host can find. Port 0
-         * dials nowhere and is refused. The name is 1…63 bytes of UTF-8, shown
-         * to the presenter when asked to approve; more is truncated on the way
-         * out and refused on the way in.
+         * seconds of TLS coming up.
+         *
+         * [commitment] is SHA-256 of a token the viewer has *not* sent yet.
+         * That ordering is the whole point and it is what makes six characters
+         * enough — see [Pairing.code]. The token itself arrives later, in
+         * [Reveal], and the host tears the connection down if it does not hash
+         * to this.
+         *
+         * The token is **not** an identity and nothing may be keyed on it. It
+         * is a fresh random per attempt whose only job is to be committed to
+         * and then revealed. What identifies a peer is SHA-256 of its
+         * certificate, which is the only thing TLS actually proved anything
+         * about.
+         *
+         * [udpPort] is where the viewer is already listening for the media
+         * lane: the host dials it, so no viewer ever needs a listener the host
+         * can find. Port 0 dials nowhere and is refused. The name is 1…63 bytes
+         * of UTF-8, shown to the presenter when asked to approve; more is
+         * truncated on the way out and refused on the way in.
+         *
+         * A plain class and not a data class: [commitment] is a ByteArray, so a
+         * generated equals would compare it by identity and quietly answer the
+         * wrong question. Same for [Welcome].
          */
-        data class Hello(val token: UUID, val udpPort: UShort, val name: String) : Message
+        class Hello(val commitment: ByteArray, val udpPort: UShort, val name: String) : Message
 
         /**
          * host -> viewer. Sent only once the viewer is approved: where the
-         * host's own end of the media lane sits, a fresh 32-byte key for that
-         * lane — one per viewer, because a shared key with independent
-         * counters would reuse a nonce — and the SHA-256 of the host's own
-         * certificate, which the viewer checks against the one TLS showed it.
+         * host's own end of the media lane sits, a **fresh 32-byte key per
+         * session**, and the SHA-256 of the host's own certificate.
+         *
+         * Fresh per session, and never cached against a remembered viewer. A
+         * key that outlives its control connection is a key used twice with
+         * counters that restart at 1 — the same keystream over two different
+         * frames, which XORs to plaintext, and the Poly1305 block with it, so
+         * it is forgery and not merely disclosure. An attacker who can reset
+         * the cleartext TCP connection chooses when that happens, and a phone
+         * going to sleep does it unprompted. So: minted in every welcome,
+         * destroyed when the control lane closes.
+         *
+         * [hostFingerprint] is a cross-check and not a source. The viewer
+         * already has the host's fingerprint from the TLS handshake — it needs
+         * it before this message arrives, to show the pairing code while
+         * approval is still pending — so this field must be *compared* against
+         * that and the session torn down if it differs. Adopting the value from
+         * here would be trusting the thing being checked.
          */
         class Welcome(val udpPort: UShort, val mediaKey: ByteArray, val hostFingerprint: ByteArray) : Message
+
+        /**
+         * host -> viewer. Sixteen fresh bytes, sent before approval so the
+         * viewer can show the pairing code while the presenter is still
+         * deciding. The host's half of the code, and it arrives after the
+         * viewer has already committed — without that order the code is a value
+         * one side chooses last, which compares nothing.
+         */
+        class HostNonce(val nonce: ByteArray) : Message
+
+        /**
+         * viewer -> host. The token [Hello] committed to. The host hashes it,
+         * checks it against the commitment, and closes on a mismatch.
+         */
+        data class Reveal(val token: UUID) : Message
     }
 
     /** The most a display name may occupy on the wire, in UTF-8 bytes. */
@@ -422,14 +474,13 @@ object Packet {
                 // exactly what it claims, the port must dial somewhere, and the
                 // name must be text — bytes that are not UTF-8 are not a name we
                 // can show anyone.
-                if (b.size < 20) return null
-                val nameLen = b.u(19).toInt()
-                if (nameLen !in 1..MAX_NAME_BYTES || b.size != 20 + nameLen) return null
-                val port = b.be16(17)
+                if (b.size < 36) return null
+                val nameLen = b.u(35).toInt()
+                if (nameLen !in 1..MAX_NAME_BYTES || b.size != 36 + nameLen) return null
+                val port = b.be16(33)
                 if (port == 0u.toUShort()) return null
-                val name = strictUtf8(b, 20, b.size) ?: return null
-                val buf = ByteBuffer.wrap(b, 1, 16)
-                return Message.Hello(UUID(buf.long, buf.long), port, name)
+                val name = strictUtf8(b, 36, b.size) ?: return null
+                return Message.Hello(b.copyOfRange(1, 33), port, name)
             }
             20 -> {
                 if (b.size != 67) return null
@@ -437,24 +488,42 @@ object Packet {
                 if (port == 0u.toUShort()) return null
                 return Message.Welcome(port, b.copyOfRange(3, 35), b.copyOfRange(35, 67))
             }
+            21 -> {
+                if (b.size != 17) return null
+                return Message.HostNonce(b.copyOfRange(1, 17))
+            }
+            22 -> {
+                if (b.size != 17) return null
+                return Message.Reveal(uuidAt(b, 1))
+            }
             else -> return null
         }
     }
 
     /**
-     * The name is cut to [MAX_NAME_BYTES] of UTF-8 on a code point boundary, so
-     * a long name loses its tail rather than the whole hello being refused at
-     * the far end. An empty name reads as "?": the format needs one byte.
+     * [commitment] is 32 bytes — [Pairing.commitment] makes one. The name is
+     * cut to [MAX_NAME_BYTES] of UTF-8 on a code point boundary, so a long name
+     * loses its tail rather than the whole hello being refused at the far end.
+     * An empty name reads as "?": the format needs one byte.
      */
-    fun encodeHello(token: UUID, udpPort: UShort, name: String): ByteArray {
+    fun encodeHello(commitment: ByteArray, udpPort: UShort, name: String): ByteArray {
+        require(commitment.size == 32) { "a commitment is SHA-256, which is 32 bytes" }
         val out = mutableListOf<Byte>(19)
-        out.addAll(uuidBytes(token).asList())
+        out.addAll(commitment.asList())
         out.appendBE16(udpPort)
         val bytes = nameBytes(name)
         out.add(bytes.size.toByte())
         out.addAll(bytes.asList())
         return out.toByteArray()
     }
+
+    /** Sixteen bytes, and they must be fresh for every viewer that connects. */
+    fun encodeHostNonce(nonce: ByteArray): ByteArray {
+        require(nonce.size == 16) { "a host nonce is 16 bytes" }
+        return byteArrayOf(21) + nonce
+    }
+
+    fun encodeReveal(token: UUID): ByteArray = byteArrayOf(22) + uuidBytes(token)
 
     /** [mediaKey] and [hostFingerprint] are 32 bytes each; anything else is a programming error. */
     fun encodeWelcome(udpPort: UShort, mediaKey: ByteArray, hostFingerprint: ByteArray): ByteArray {
@@ -805,6 +874,19 @@ internal fun MutableList<Byte>.appendBE(v: UInt) {
     add(i.toByte())
 }
 
-/** A UUID as the 16 bytes its string form spells (RFC 4122 order). */
+/**
+ * A UUID as the 16 bytes its string form spells (RFC 4122 order).
+ *
+ * Note for anyone comparing these as strings across the two languages:
+ * `UUID.toString()` is lowercase here and Swift's `uuidString` is uppercase, so
+ * a cross-language string comparison has to normalise. Comparing the bytes,
+ * as the wire does, has no such problem.
+ */
 internal fun uuidBytes(u: UUID): ByteArray =
     ByteBuffer.allocate(16).putLong(u.mostSignificantBits).putLong(u.leastSignificantBits).array()
+
+/** Sixteen bytes at [o] as a UUID, in RFC 4122 order. */
+internal fun uuidAt(b: ByteArray, o: Int): UUID {
+    val buf = ByteBuffer.wrap(b, o, 16)
+    return UUID(buf.long, buf.long)
+}

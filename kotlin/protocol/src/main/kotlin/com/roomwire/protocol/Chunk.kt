@@ -7,9 +7,12 @@ package com.roomwire.protocol
  * ChaCha20-Poly1305 with that header as associated data, then the 16-byte tag.
  *
  *   [0]      kind: 0 a slice of a video frame, 1 a whole small message, 2 a ping
- *   [1..8]   counter: per sender, per connection, from 1, +1 every datagram.
- *            The AEAD nonce and the replay window both hang off it.
- *   [9..12]  frame id: video only — per connection, +1 per frame sent; 0 otherwise
+ *   [1..8]   counter: per sender, per session, from 1, +1 every datagram. The
+ *            AEAD nonce and the replay window both hang off it, and the key it
+ *            is used under lives exactly as long as it does — see MediaSeal.
+ *   [9..12]  frame id: video only — per connection, +1 per frame sent. Ignored
+ *            for a message or a ping, and *not* checked: neither end has any use
+ *            for it there, so there is nothing for a decoder to enforce.
  *   [13..14] index of this slice within its frame
  *   [15..16] slices in the frame: 1…512 for video, exactly 1 for anything else
  *
@@ -62,8 +65,14 @@ object ChunkHeader {
 /**
  * Cuts a frame into bodies of at most [ChunkHeader.BODY] bytes. The headers are
  * the transport's to write — counter and frame id are per peer — so a frame is
- * sliced once and sealed once per viewer. null for an empty frame or one that
- * would need more than 512 slices.
+ * sliced once and sealed once per viewer.
+ *
+ * null for an empty frame, or one that would need more than 512 slices — which
+ * is 699,904 bytes, and a 5K keyframe at high quality can exceed it. **A caller
+ * that gets null must ask the encoder for another keyframe and say so in a log,
+ * not return quietly**: dropping the one frame the stream cannot start without,
+ * silently, is the whole failure. `count` is a u16, so raising the cap later is
+ * a sender-only change.
  */
 object Chunker {
     fun slice(frame: ByteArray): List<ByteArray>? {

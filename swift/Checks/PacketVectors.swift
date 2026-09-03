@@ -215,33 +215,39 @@ enum PacketVectors {
     // MARK: - Transport, ids 19 and 20
 
     static let token = UUID(uuidString: "0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0")!
+    static let otherToken = UUID(uuidString: "FFEEDDCC-BBAA-9988-7766-554433221100")!
     static let mediaKey = Data((0 ..< 32).map(UInt8.init))            // 00…1f
     static let hostFp = Data(repeating: 0x11, count: 32)
     static let viewerFp = Data(repeating: 0x22, count: 32)
+    static let hostNonce = Data((0x50 ..< 0x60).map(UInt8.init))
+    static var commitment: Data { Pairing.commitment(for: token) }
 
     static func transport() {
-        // The token is a UUID in RFC 4122 byte order — the same bytes its
-        // string form spells — so both sides can key a trust store by the string.
-        encode("hello", Packet.encodeHello(token: token, udpPort: 0xC001, name: "Ada’s Pixel"))
-        encode("hello.longName", Packet.encodeHello(token: token, udpPort: 1, name: String(repeating: "n", count: 63)))
+        // hello commits to a token rather than carrying it: the viewer speaks
+        // first, so it is the side that has to be pinned down first.
+        encode("hello", Packet.encodeHello(commitment: commitment, udpPort: 0xC001, name: "Ada’s Pixel"))
+        encode("hello.longName", Packet.encodeHello(commitment: commitment, udpPort: 1,
+                                                     name: String(repeating: "n", count: 63)))
         // A name is made to fit by the protocol, not by whatever the platform
         // happened to store. Forty emoji is 160 bytes and cannot be sent; the
         // clamp drops whole characters until it can, which is fifteen of them.
-        encode("hello.clamped.emoji", Packet.encodeHello(token: token, udpPort: 1,
+        encode("hello.clamped.emoji", Packet.encodeHello(commitment: commitment, udpPort: 1,
                                                           name: String(repeating: "😀", count: 40)))
         // Exactly 63 bytes of multi-byte text survives untouched…
-        encode("hello.clamped.exactly63", Packet.encodeHello(token: token, udpPort: 1,
+        encode("hello.clamped.exactly63", Packet.encodeHello(commitment: commitment, udpPort: 1,
                                                               name: String(repeating: "é", count: 31) + "a"))
         // …and one byte more loses a whole character, not half of one. Cutting
         // at byte 63 here would split an "é" and produce a hello the far end
         // must refuse.
-        encode("hello.clamped.overByOne", Packet.encodeHello(token: token, udpPort: 1,
+        encode("hello.clamped.overByOne", Packet.encodeHello(commitment: commitment, udpPort: 1,
                                                               name: String(repeating: "é", count: 32)))
-        encode("hello.clamped.trimmed", Packet.encodeHello(token: token, udpPort: 1, name: "  Ada's Mac \t\n"))
+        encode("hello.clamped.trimmed", Packet.encodeHello(commitment: commitment, udpPort: 1, name: "  Ada's Mac \t\n"))
         // Nothing left after trimming: the format needs a byte, so it is "?".
-        encode("hello.clamped.blank", Packet.encodeHello(token: token, udpPort: 1, name: " \t\r\n "))
+        encode("hello.clamped.blank", Packet.encodeHello(commitment: commitment, udpPort: 1, name: " \t\r\n "))
         encode("welcome", Packet.encodeWelcome(udpPort: 0xD002, mediaKey: mediaKey,
                                                hostFingerprint: Data((0x40 ..< 0x60).map(UInt8.init))))
+        encode("hostNonce", Packet.encodeHostNonce(hostNonce))
+        encode("reveal", Packet.encodeReveal(token: token))
     }
 
     // MARK: - The media lane's header and envelope, the pairing code, the control lane's framing
@@ -264,13 +270,29 @@ enum PacketVectors {
         encode("seal.message", MediaSeal.seal(messageFields, body: Packet.needKeyframeMessage, key: sealKey, lane: 0))
         encode("seal.ping", MediaSeal.seal(pingFields, body: Data(), key: sealKey, lane: 0))
 
-        // Six characters both screens show; here as the ASCII they are.
+        // Six characters both screens show; here as the ASCII they are. Both
+        // nonces are in it, and the order they were fixed in is what makes six
+        // characters enough — see Pairing.code.
         let token33 = UUID(uuid: (0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
                                   0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33))
         encode("pairing.code", Data(Pairing.code(hostFingerprint: hostFp, viewerFingerprint: viewerFp,
-                                                 token: token33).utf8))
+                                                 token: token33, hostNonce: hostNonce).utf8))
+        // A commitment and the token it opens, as 48 bytes: the verdict is
+        // whether the second is the preimage of the first.
+        encode("commit.matches", commitment + tokenBytes(token))
+        reject("commit.mismatch", commitment + tokenBytes(otherToken))
+        reject("commit.short", commitment.prefix(31) + tokenBytes(token))
 
         encode("frame.control", Framing.encode(Packet.needKeyframeMessage))
+        // The inclusive edges, which a `<` where a `<=` belongs would move
+        // without changing any other line in this file.
+        accept("chunk.countAtCap",
+               ChunkHeader.encode(.init(kind: .video, counter: 7, frameId: 1, index: 511, count: 512)))
+        // A counter with its top half set: the only vector that would notice a
+        // 32-bit read, or a signed one on the JVM.
+        encode("seal.counterMax",
+               MediaSeal.seal(.init(kind: .video, counter: .max, frameId: 0x0102_0304, index: 2, count: 150),
+                              body: body16, key: sealKey, lane: 0))
     }
 
     // MARK: - Everything a decoder has to refuse
@@ -366,7 +388,7 @@ enum PacketVectors {
 
         // The hello's own length byte must agree with the frame, the name must
         // be 1…63 bytes of text, and a port of 0 dials nowhere.
-        let helloHead = Data([19]) + Data(repeating: 0x0F, count: 16) + Data([0xC0, 0x01])
+        let helloHead = Data([19]) + Data(repeating: 0x0F, count: 32) + Data([0xC0, 0x01])
         reject("hello.emptyName", helloHead + Data([0]))
         reject("hello.nameTooLong", helloHead + Data([64]) + Data(repeating: 0x6E, count: 64))
         reject("hello.badUtf8", helloHead + Data([2, 0xFF, 0xFE]))
@@ -375,8 +397,13 @@ enum PacketVectors {
         // rather than substitute — this is the shape a name truncated by UTF-16
         // units arrives in, and it is the reason the clamp counts code points.
         reject("hello.surrogateInUtf8", helloHead + Data([3, 0xED, 0xA0, 0x80]))
+        // C0 80 is a NUL spelled the long way, which UTF-8 forbids so that a
+        // string cannot be smuggled past a length check; F0 9F is the first
+        // half of an emoji, which is what a byte-wise truncation leaves behind.
+        reject("hello.overlongUtf8", helloHead + Data([2, 0xC0, 0x80]))
+        reject("hello.truncatedUtf8", helloHead + Data([2, 0xF0, 0x9F]))
         reject("hello.lengthDisagrees", helloHead + Data([5]) + Data(repeating: 0x6E, count: 6))
-        reject("hello.port0", Data([19]) + Data(repeating: 0x0F, count: 16) + Data([0, 0, 1, 0x6E]))
+        reject("hello.port0", Data([19]) + Data(repeating: 0x0F, count: 32) + Data([0, 0, 1, 0x6E]))
         reject("hello.short", helloHead)
 
         // A welcome is exactly 67 bytes, and the host's port dials somewhere too.
@@ -417,9 +444,15 @@ enum PacketVectors {
         reject("frame.zeroLength", Data([0, 0, 0, 0]))
         reject("frame.overCap", be32(UInt32(Framing.maxLength + 1)))
 
-        // Nothing is allocated past 20 yet. An unknown id must not be mistaken
-        // for the nearest one that happens to be the right length.
-        reject("id.unallocated21", Data([21, 1]))
+        reject("hostNonce.short", Data([21]) + Data(repeating: 0x50, count: 15))
+        reject("hostNonce.long", Data([21]) + Data(repeating: 0x50, count: 17))
+        reject("reveal.short", Data([22]) + Data(repeating: 0x0F, count: 15))
+        reject("reveal.long", Data([22]) + Data(repeating: 0x0F, count: 17))
+
+        // 23 is reserved for a second hello and nothing is allocated past it.
+        // An unknown id must not be mistaken for the nearest one that happens
+        // to be the right length.
+        reject("id.reserved23", Data([23, 1]))
         reject("id.unallocated200", Data([200]))
         reject("id.empty", Data())
     }
@@ -441,13 +474,84 @@ enum PacketVectors {
             return decoder.feed(data) != nil
         }
         if name.hasPrefix("pairing.") { return true }
+        if name.hasPrefix("commit.") {
+            guard data.count == 48 else { return false }
+            return Pairing.opens(commitment: data.prefix(32),
+                                 token: Packet.uuid([UInt8](data), 32))
+        }
         return Packet.decodeMessage(data) != nil
+    }
+
+    /// Every ENCODE vector must decode *and* re-encode to the bytes it came
+    /// from. Without this half a vector only ever asserted that bytes parse,
+    /// never what they parsed to — and every field's offset on the decode side
+    /// was unpinned. A media key read at 4..<36 instead of 3..<35 is still a
+    /// 32-byte slice and still decodes; a frame id read one byte early still
+    /// parses and still opens. Both are caught here and nowhere else.
+    static func roundTrip(_ name: String, _ data: Data) {
+        guard let again = reencode(name, data) else { return }
+        guard again == data else {
+            fatalError("\(name): decoded and re-encoded to different bytes\n  was: \(hex(data))\n  got: \(hex(again))")
+        }
+    }
+
+    static func reencode(_ name: String, _ data: Data) -> Data? {
+        if name.hasPrefix("chunk.") { return ChunkHeader.decode(data).map(ChunkHeader.encode) }
+        if name.hasPrefix("seal.") {
+            guard let (h, body) = MediaSeal.open(data, key: sealKey, lane: 0) else { return nil }
+            return MediaSeal.seal(h, body: body, key: sealKey, lane: 0)
+        }
+        if name.hasPrefix("frame.") {
+            var decoder = Framing.Decoder()
+            guard let frames = decoder.feed(data), frames.count == 1 else { return nil }
+            return Framing.encode(frames[0])
+        }
+        if name.hasPrefix("pairing.") || name.hasPrefix("commit.") { return nil }
+        guard let message = Packet.decodeMessage(data) else { return nil }
+        switch message {
+        case .video(let f):
+            return Packet.encode(payload: f.payload, sps: f.sps, pps: f.pps, keyframe: f.keyframe,
+                                 recovery: f.recovery, droppable: f.droppable, sentMs: f.sentMs,
+                                 sequence: f.sequence, baseSequence: f.baseSequence, ltrToken: f.ltrToken)
+        case .cursor(let seq, let sentMs, let x, let y):
+            return Packet.encodeCursor(seq: seq, sentMs: sentMs, x: x, y: y)
+        case .cursorHidden(let seq): return Packet.encodeCursorHidden(seq: seq)
+        case .mark(let kind, let x, let y): return Packet.encodeMark(kind, x: x, y: y)
+        case .relayedMark(let slot, let kind, let x, let y):
+            return Packet.encodeRelayedMark(slot: slot, kind: kind, x: x, y: y)
+        case .reaction(let r): return Packet.encodeReaction(r)
+        case .telemetry(let frames, let kilobytes, let maxGap, let p95, let skipped, let gapDropped):
+            return Packet.encodeTelemetry(frames: frames, kilobytes: kilobytes, maxGapMs: maxGap,
+                                          p95GapMs: p95, skipped: skipped, gapDropped: gapDropped)
+        case .needKeyframe: return Packet.needKeyframeMessage
+        case .identify: return Packet.identifyMessage
+        case .ackReference(let token): return Packet.encodeAckReference(token: token)
+        case .needRefresh: return Packet.needRefreshMessage
+        case .flight(let records): return Packet.encodeFlight(records)
+        case .probe(let samples): return Packet.encodeProbe(samples)
+        case .input(let buttons, let x, let y): return Packet.encodeInput(buttons: buttons, x: x, y: y)
+        case .scroll(let dx, let dy): return Packet.encodeScroll(dx: dx, dy: dy)
+        case .requestControl: return Packet.requestControlMessage
+        case .controlGranted(let granted): return Packet.encodeControlGranted(granted)
+        case .systemGesture(let g): return Packet.encodeSystemGesture(g)
+        case .hello(let commitment, let port, let name):
+            return Packet.encodeHello(commitment: commitment, udpPort: port, name: name)
+        case .welcome(let port, let key, let fingerprint):
+            return Packet.encodeWelcome(udpPort: port, mediaKey: key, hostFingerprint: fingerprint)
+        case .hostNonce(let nonce): return Packet.encodeHostNonce(nonce)
+        case .reveal(let token): return Packet.encodeReveal(token: token)
+        }
+    }
+
+    static func tokenBytes(_ u: UUID) -> Data {
+        Data(withUnsafeBytes(of: u.uuid) { [UInt8]($0) })
     }
 
     static func encode(_ name: String, _ data: Data) {
         guard decodes(name, data) else {
             fatalError("\(name): this vector does not decode on the Swift side, so it is not truth")
         }
+        roundTrip(name, data)
         lines.append("\(name)\tENCODE\t\(hex(data))")
     }
 

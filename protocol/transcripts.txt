@@ -198,35 +198,36 @@ touch	orphans	holdFired	-	-
 touch	orphans	admit	phase=ended x=20.000000 y=20.000000	step(0,20.000000,20.000000)
 reassembler	inOrder	absorb	frame=1 index=0 count=3 len=1367 now=10.000000	nil
 reassembler	inOrder	absorb	frame=1 index=1 count=3 len=1367 now=10.010000	nil
-reassembler	inOrder	absorb	frame=1 index=2 count=3 len=100 now=10.020000	delivered len=2834 sum=11713
-reassembler	inOrder	absorb	frame=2 index=0 count=1 len=50 now=10.050000	delivered len=50 sum=1325
+reassembler	inOrder	absorb	frame=1 index=2 count=3 len=100 now=10.020000	delivered len=2834 sum=17043
+reassembler	inOrder	absorb	frame=2 index=0 count=1 len=50 now=10.050000	delivered len=50 sum=63065
 reassembler	reorder	absorb	frame=1 index=2 count=3 len=100 now=10.000000	nil
 reassembler	reorder	absorb	frame=1 index=0 count=3 len=1367 now=10.010000	nil
-reassembler	reorder	absorb	frame=1 index=1 count=3 len=1367 now=10.020000	delivered len=2834 sum=11713
+reassembler	reorder	absorb	frame=1 index=1 count=3 len=1367 now=10.020000	delivered len=2834 sum=17043
 reassembler	loss	absorb	frame=1 index=0 count=3 len=1367 now=10.000000	nil
 reassembler	loss	absorb	frame=1 index=2 count=3 len=100 now=10.010000	nil
-reassembler	loss	absorb	frame=2 index=0 count=1 len=50 now=10.040000	delivered len=50 sum=1325
+reassembler	loss	absorb	frame=2 index=0 count=1 len=50 now=10.040000	delivered len=50 sum=63065
 reassembler	loss	absorb	frame=1 index=1 count=3 len=1367 now=10.050000	nil
 reassembler	deadline	absorb	frame=1 index=0 count=2 len=1367 now=10.000000	nil
 reassembler	deadline	absorb	frame=1 index=1 count=2 len=10 now=10.150000	nil
-reassembler	deadline	absorb	frame=1 index=0 count=2 len=1367 now=10.160000	delivered len=1377 sum=36021
-reassembler	eviction	absorb	frame=3 index=0 count=2 len=1367 now=10.000000	nil
-reassembler	eviction	absorb	frame=4 index=0 count=1 len=20 now=10.010000	delivered len=20 sum=270
-reassembler	eviction	absorb	frame=3 index=1 count=2 len=20 now=10.020000	nil
+reassembler	deadline	absorb	frame=1 index=0 count=2 len=1367 now=10.160000	delivered len=1377 sum=27889
+reassembler	staleAfterNewer	absorb	frame=3 index=0 count=2 len=1367 now=10.000000	nil
+reassembler	staleAfterNewer	absorb	frame=4 index=0 count=1 len=20 now=10.010000	delivered len=20 sum=6410
+reassembler	staleAfterNewer	absorb	frame=3 index=1 count=2 len=20 now=10.020000	nil
 reassembler	liar	absorb	frame=1 index=0 count=2 len=1367 now=10.000000	nil
 reassembler	liar	absorb	frame=1 index=1 count=3 len=10 now=10.010000	nil
-reassembler	liar	absorb	frame=1 index=1 count=2 len=10 now=10.020000	delivered len=1377 sum=36021
+reassembler	liar	absorb	frame=1 index=511 count=512 len=10 now=10.015000	nil
+reassembler	liar	absorb	frame=1 index=1 count=2 len=10 now=10.020000	delivered len=1377 sum=27889
 reassembler	duplicate	absorb	frame=1 index=0 count=2 len=1367 now=10.000000	nil
 reassembler	duplicate	absorb	frame=1 index=0 count=2 len=1367 now=10.010000	nil
-reassembler	duplicate	absorb	frame=1 index=1 count=2 len=10 now=10.020000	delivered len=1377 sum=36021
-reassembler	forwardOnly	absorb	frame=5 index=0 count=1 len=10 now=10.000000	delivered len=10 sum=95
+reassembler	duplicate	absorb	frame=1 index=1 count=2 len=10 now=10.020000	delivered len=1377 sum=27889
+reassembler	forwardOnly	absorb	frame=5 index=0 count=1 len=10 now=10.000000	delivered len=10 sum=39717
 reassembler	forwardOnly	absorb	frame=4 index=0 count=1 len=10 now=10.010000	nil
 reassembler	forwardOnly	absorb	frame=5 index=0 count=1 len=10 now=10.020000	nil
-reassembler	forwardOnly	absorb	frame=6 index=0 count=1 len=10 now=10.030000	delivered len=10 sum=105
-reassembler	wrap	absorb	frame=4294967294 index=0 count=1 len=10 now=10.000000	delivered len=10 sum=537
-reassembler	wrap	absorb	frame=4294967295 index=0 count=1 len=10 now=10.010000	delivered len=10 sum=291
-reassembler	wrap	absorb	frame=0 index=0 count=1 len=10 now=10.020000	delivered len=10 sum=45
-reassembler	wrap	absorb	frame=1 index=0 count=1 len=10 now=10.030000	delivered len=10 sum=55
+reassembler	forwardOnly	absorb	frame=6 index=0 count=1 len=10 now=10.030000	delivered len=10 sum=19397
+reassembler	wrap	absorb	frame=4294967294 index=0 count=1 len=10 now=10.000000	delivered len=10 sum=59077
+reassembler	wrap	absorb	frame=4294967295 index=0 count=1 len=10 now=10.010000	delivered len=10 sum=38501
+reassembler	wrap	absorb	frame=0 index=0 count=1 len=10 now=10.020000	delivered len=10 sum=10245
+reassembler	wrap	absorb	frame=1 index=0 count=1 len=10 now=10.030000	delivered len=10 sum=55461
 reassembler	wrap	absorb	frame=4294967295 index=0 count=1 len=10 now=10.040000	nil
 reassembler	tooManyPartials	absorb	frame=1 index=0 count=2 len=10 now=10.001000	nil
 reassembler	tooManyPartials	absorb	frame=2 index=0 count=2 len=10 now=10.002000	nil
@@ -238,12 +239,12 @@ reassembler	tooManyPartials	absorb	frame=7 index=0 count=2 len=10 now=10.007000	
 reassembler	tooManyPartials	absorb	frame=8 index=0 count=2 len=10 now=10.008000	nil
 reassembler	tooManyPartials	absorb	frame=9 index=0 count=2 len=10 now=10.009000	nil
 reassembler	tooManyPartials	absorb	frame=1 index=1 count=2 len=10 now=10.010000	nil
-reassembler	tooManyPartials	absorb	frame=9 index=1 count=2 len=10 now=10.011000	delivered len=20 sum=280
+reassembler	tooManyPartials	absorb	frame=9 index=1 count=2 len=10 now=10.011000	delivered len=20 sum=25002
 reassembler	hostile	absorb	frame=1 index=0 count=0 len=10 now=10.000000	nil
 reassembler	hostile	absorb	frame=1 index=2 count=2 len=10 now=10.000000	nil
 reassembler	hostile	absorb	frame=1 index=0 count=513 len=10 now=10.000000	nil
 reassembler	hostile	absorb	frame=1 index=0 count=1 len=1368 now=10.000000	nil
-reassembler	hostile	absorb	frame=1 index=0 count=1 len=1367 now=10.000000	delivered len=1367 sum=35956
+reassembler	hostile	absorb	frame=1 index=0 count=1 len=1367 now=10.000000	delivered len=1367 sum=19116
 replay	inOrder	admit	counter=1	accept
 replay	inOrder	admit	counter=2	accept
 replay	inOrder	admit	counter=3	accept
@@ -264,6 +265,42 @@ replay	jumpAhead	admit	counter=4999	accept
 replay	jumpAhead	admit	counter=3000	reject
 replay	jumpAhead	admit	counter=1	reject
 replay	jumpAhead	admit	counter=5001	accept
+replay	slideForward	admit	counter=1	accept
+replay	slideForward	admit	counter=1024	accept
+replay	slideForward	admit	counter=1025	accept
 replay	startAtOne	admit	counter=0	reject
 replay	startAtOne	admit	counter=1	accept
 replay	startAtOne	admit	counter=0	reject
+opener	inOrder	open	role=viewer lane=0 counter=1 len=16 tamper=none	delivered counter=1 len=16 sum=37128
+opener	inOrder	open	role=viewer lane=0 counter=2 len=16 tamper=none	delivered counter=2 len=16 sum=45576
+opener	inOrder	open	role=viewer lane=0 counter=3 len=16 tamper=none	delivered counter=3 len=16 sum=54024
+opener	duplicate	open	role=viewer lane=0 counter=1 len=16 tamper=none	delivered counter=1 len=16 sum=37128
+opener	duplicate	open	role=viewer lane=0 counter=2 len=16 tamper=none	delivered counter=2 len=16 sum=45576
+opener	duplicate	open	role=viewer lane=0 counter=2 len=16 tamper=none	refused
+opener	forgedSprayThenReal	open	role=viewer lane=0 counter=1 len=16 tamper=tag	refused
+opener	forgedSprayThenReal	open	role=viewer lane=0 counter=2 len=16 tamper=tag	refused
+opener	forgedSprayThenReal	open	role=viewer lane=0 counter=3 len=16 tamper=tag	refused
+opener	forgedSprayThenReal	open	role=viewer lane=0 counter=4 len=16 tamper=tag	refused
+opener	forgedSprayThenReal	open	role=viewer lane=0 counter=5 len=16 tamper=tag	refused
+opener	forgedSprayThenReal	open	role=viewer lane=0 counter=3 len=16 tamper=none	delivered counter=3 len=16 sum=54024
+opener	forgedSprayThenReal	open	role=viewer lane=0 counter=3 len=16 tamper=none	refused
+opener	wrongLane	open	role=viewer lane=1 counter=1 len=16 tamper=lane	refused
+opener	wrongLane	open	role=viewer lane=0 counter=1 len=16 tamper=none	delivered counter=1 len=16 sum=37128
+opener	hostRole	open	role=host lane=1 counter=1 len=16 tamper=none	delivered counter=1 len=16 sum=37128
+opener	hostRole	open	role=host lane=0 counter=1 len=16 tamper=lane	refused
+opener	hostRole	open	role=host lane=1 counter=2 len=16 tamper=none	delivered counter=2 len=16 sum=45576
+opener	tamperedHeader	open	role=viewer lane=0 counter=1 len=16 tamper=header	refused
+opener	tamperedHeader	open	role=viewer lane=0 counter=1 len=16 tamper=none	delivered counter=1 len=16 sum=37128
+framing	whole	feed	bytes=00000003010203	frame len=3 sum=1026
+framing	splitAcrossLength	feed	bytes=0000	none
+framing	splitAcrossLength	feed	bytes=000301	none
+framing	splitAcrossLength	feed	bytes=02	none
+framing	splitAcrossLength	feed	bytes=03	frame len=3 sum=1026
+framing	splitAcrossBody	feed	bytes=00000004aa	none
+framing	splitAcrossBody	feed	bytes=bbcc	none
+framing	splitAcrossBody	feed	bytes=dd	frame len=4 sum=7842
+framing	twoInOneFeed	feed	bytes=00000001080000000210110000	frame len=1 sum=8;frame len=2 sum=513
+framing	twoInOneFeed	feed	bytes=000109	frame len=1 sum=9
+framing	zeroLength	feed	bytes=00000000	violation
+framing	overCap	feed	bytes=00800001	violation
+framing	atCap	feed	bytes=00800000	none

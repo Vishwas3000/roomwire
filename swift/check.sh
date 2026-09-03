@@ -33,7 +33,7 @@ fi
 # then"; a transcript can. Same discipline as the vectors: regenerate, diff,
 # and a change must land in a checked-in file alongside the Kotlin side.
 swiftc $src/Packet.swift $src/ChainGate.swift $src/Pacer.swift $src/CursorMotion.swift $src/Pointer.swift \
-    $src/Chunk.swift Checks/TranscriptVectors.swift -o "$out/transcripts"
+    $src/Chunk.swift $src/MediaSeal.swift $src/Pairing.swift Checks/TranscriptVectors.swift -o "$out/transcripts"
 "$out/transcripts" > "$out/transcripts.txt"
 if ! diff -u ../protocol/transcripts.txt "$out/transcripts.txt"; then
     echo "check.sh: behaviour moved. See the diff above."

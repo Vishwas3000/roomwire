@@ -12,8 +12,52 @@ enum MediaLaneCheck {
     static func main() {
         chunks()
         seal()
+        sealerAndOpener()
         replay()
         print("media lane checks passed")
+    }
+
+    /// The composed halves, and the two mistakes they exist to make
+    /// unwritable: a lane chosen by hand, and a counter two queues can read at
+    /// the same time.
+    static func sealerAndOpener() {
+        let key = SymmetricKey(size: .bits256)
+        let host = MediaSeal.Sealer(key: key, role: .host)
+        var viewer = MediaSeal.Opener(key: key, role: .viewer)
+        let back = MediaSeal.Sealer(key: key, role: .viewer)
+        var hostSide = MediaSeal.Opener(key: key, role: .host)
+
+        // The lane is derived from the role, so each end opens what the other seals.
+        let d = host.seal(kind: .video, body: Data([1, 2, 3]), frameId: 4, index: 0, count: 1)
+        guard let (fields, body) = viewer.open(d) else { fatalError("the viewer could not open the host's datagram") }
+        assert(fields.counter == 1 && body == Data([1, 2, 3]), "first counter is not 1")
+        assert(hostSide.open(d) == nil, "the host opened its own outbound datagram")
+        let up = back.seal(kind: .ping, body: Data())
+        assert(hostSide.open(up) != nil, "the host could not open the viewer's datagram")
+        assert(viewer.open(up) == nil, "the viewer opened its own outbound datagram")
+
+        // Seen once. And the window is reached only after the tag, so a forged
+        // counter cannot burn a real one — the transcripts pin that too.
+        assert(viewer.open(d) == nil, "a replayed datagram was accepted")
+
+        // Two queues, one sealer, no repeated counter. Without the lock this
+        // hands the same counter out twice, which is the same nonce twice.
+        let sealer = MediaSeal.Sealer(key: key, role: .host)
+        let lock = NSLock()
+        var counters: Set<UInt64> = []
+        let group = DispatchGroup()
+        for _ in 0 ..< 4 {
+            DispatchQueue.global().async(group: group) {
+                for _ in 0 ..< 500 {
+                    let datagram = sealer.seal(kind: .ping, body: Data())
+                    guard let h = ChunkHeader.decode(datagram) else { fatalError("sealed a datagram we cannot read") }
+                    lock.lock(); counters.insert(h.counter); lock.unlock()
+                }
+            }
+        }
+        group.wait()
+        assert(counters.count == 2000, "the counter was handed out twice: \(counters.count) distinct of 2000")
+        assert(counters.min() == 1 && counters.max() == 2000, "counters are not 1…2000")
     }
 
     static func header(_ id: UInt32, _ index: Int, _ count: Int) -> ChunkHeader.Fields {
@@ -28,7 +72,9 @@ enum MediaLaneCheck {
         assert(slices.allSatisfy { $0.count <= ChunkHeader.body }, "a slice exceeds the body")
         assert(slices.reduce(Data(), +) == frame, "slices do not concatenate back to the frame")
         assert(Chunker.slice(Data()) == nil, "an empty frame sliced")
-        assert(Chunker.slice(Data(repeating: 0, count: ChunkHeader.body * 512)) != nil, "512 slices refused")
+        // The cap is inclusive, and one byte past it is nil — which a caller
+        // must turn into a keyframe request, not a silent drop.
+        assert(Chunker.slice(Data(repeating: 0, count: ChunkHeader.body * 512))?.count == 512, "512 slices refused")
         assert(Chunker.slice(Data(repeating: 0, count: ChunkHeader.body * 512 + 1)) == nil, "513 slices accepted")
 
         // In order, the frame comes back byte-identical.

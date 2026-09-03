@@ -31,7 +31,7 @@ class PacketVectorsTest {
         }
         // A short read must fail loudly rather than report a green suite over
         // half the format.
-        assertEquals(133, rows.size, "expected 133 vectors, parsed ${rows.size}")
+        assertEquals(146, rows.size, "expected 146 vectors, parsed ${rows.size}")
 
         return rows.map { (name, verdict, hex) ->
             DynamicTest.dynamicTest("$verdict $name") { check(name, verdict, unhex(hex)) }
@@ -44,6 +44,14 @@ class PacketVectorsTest {
                 ?: fail("ENCODE vector '$name' has no construction here — the port is missing it")
             assertEquals(hex(bytes), hex(built), "$name: encoded bytes differ")
             assertTrue(decodes(name, bytes), "$name: encoded bytes must also decode")
+            // And decode to the right *values*, not merely parse. Without this
+            // half a vector never asserted what the bytes meant, and every
+            // field's offset on the decode side was unpinned: a media key read
+            // at 4..36 instead of 3..35 is still a 32-byte slice and still
+            // decodes, and the media lane simply never opens.
+            reencoded(name, bytes)?.let {
+                assertEquals(hex(bytes), hex(it), "$name: decoded and re-encoded to different bytes")
+            }
         }
         "ACCEPT" -> assertTrue(decodes(name, bytes), "$name: refused bytes it must accept")
         "REJECT" -> assertFalse(decodes(name, bytes), "$name: accepted bytes it must refuse")
@@ -62,7 +70,51 @@ class PacketVectorsTest {
         name.startsWith("seal.") -> MediaSeal.open(bytes, mediaKey, if (name == "seal.wrongLane") 1u else 0u) != null
         name.startsWith("frame.") -> Framing.Decoder().feed(bytes) != null
         name.startsWith("pairing.") -> true
+        name.startsWith("commit.") ->
+            bytes.size == 48 && Pairing.opens(bytes.copyOfRange(0, 32), uuidFrom(bytes, 32))
         else -> Packet.decodeMessage(bytes) != null
+    }
+
+    /** Decode, then encode again from what came out. Must be the same bytes. */
+    private fun reencoded(name: String, bytes: ByteArray): ByteArray? = when {
+        name.startsWith("chunk.") -> ChunkHeader.decode(bytes)?.let { ChunkHeader.encode(it) }
+        name.startsWith("seal.") -> MediaSeal.open(bytes, mediaKey, 0u)
+            ?.let { MediaSeal.seal(it.first, it.second, mediaKey, 0u) }
+        name.startsWith("frame.") -> Framing.Decoder().feed(bytes)
+            ?.singleOrNull()?.let { Framing.encode(it) }
+        name.startsWith("pairing.") || name.startsWith("commit.") -> null
+        else -> when (val m = Packet.decodeMessage(bytes)) {
+            null -> null
+            is Packet.Message.Video -> m.frame.let {
+                Packet.encode(
+                    it.payload, it.sps, it.pps, it.keyframe, it.recovery, it.droppable,
+                    it.sentMs, it.sequence, it.baseSequence, it.ltrToken,
+                )
+            }
+            is Packet.Message.Cursor -> Packet.encodeCursor(m.seq, m.sentMs, m.x, m.y)
+            is Packet.Message.CursorHidden -> Packet.encodeCursorHidden(m.seq)
+            is Packet.Message.Mark -> Packet.encodeMark(m.kind, m.x, m.y)
+            is Packet.Message.RelayedMark -> Packet.encodeRelayedMark(m.slot, m.kind, m.x, m.y)
+            is Packet.Message.Reaction -> Packet.encodeReaction(m.kind)
+            is Packet.Message.Telemetry -> Packet.encodeTelemetry(
+                m.frames, m.kilobytes, m.maxGapMs, m.p95GapMs, m.skipped, m.gapDropped,
+            )
+            Packet.Message.NeedKeyframe -> Packet.needKeyframeMessage
+            Packet.Message.Identify -> Packet.identifyMessage
+            is Packet.Message.AckReference -> Packet.encodeAckReference(m.token)
+            Packet.Message.NeedRefresh -> Packet.needRefreshMessage
+            is Packet.Message.Flight -> Packet.encodeFlight(m.records)
+            is Packet.Message.Probe -> Packet.encodeProbe(m.samples)
+            is Packet.Message.Input -> Packet.encodeInput(m.buttons, m.x, m.y)
+            is Packet.Message.Scroll -> Packet.encodeScroll(m.dx, m.dy)
+            Packet.Message.RequestControl -> Packet.requestControlMessage
+            is Packet.Message.ControlGranted -> Packet.encodeControlGranted(m.granted)
+            is Packet.Message.SystemGesture -> Packet.encodeSystemGesture(m.kind)
+            is Packet.Message.Hello -> Packet.encodeHello(m.commitment, m.udpPort, m.name)
+            is Packet.Message.Welcome -> Packet.encodeWelcome(m.udpPort, m.mediaKey, m.hostFingerprint)
+            is Packet.Message.HostNonce -> Packet.encodeHostNonce(m.nonce)
+            is Packet.Message.Reveal -> Packet.encodeReveal(m.token)
+        }
     }
 
     // The inputs live in both languages; the bytes live in vectors.txt. Inputs
@@ -196,19 +248,21 @@ class PacketVectorsTest {
 
         // The token is a UUID in RFC 4122 byte order — the same bytes its
         // string form spells — so both sides can key a trust store by the string.
-        "hello" -> Packet.encodeHello(token, 0xC001u, "Ada’s Pixel")
-        "hello.longName" -> Packet.encodeHello(token, 1u, "n".repeat(63))
+        "hello" -> Packet.encodeHello(commitment, 0xC001u, "Ada’s Pixel")
+        "hello.longName" -> Packet.encodeHello(commitment, 1u, "n".repeat(63))
         // A name is made to fit by the protocol, not by whatever the platform
         // stored. Forty emoji is 160 bytes; the clamp drops whole characters
         // until it fits, which is fifteen of them — a UTF-16 truncation would
         // split a surrogate pair here and a byte truncation would split a
         // character, and both produce a hello the far end must refuse.
-        "hello.clamped.emoji" -> Packet.encodeHello(token, 1u, "\uD83D\uDE00".repeat(40))
-        "hello.clamped.exactly63" -> Packet.encodeHello(token, 1u, "é".repeat(31) + "a")
-        "hello.clamped.overByOne" -> Packet.encodeHello(token, 1u, "é".repeat(32))
-        "hello.clamped.trimmed" -> Packet.encodeHello(token, 1u, "  Ada's Mac \t\n")
-        "hello.clamped.blank" -> Packet.encodeHello(token, 1u, " \t\r\n ")
+        "hello.clamped.emoji" -> Packet.encodeHello(commitment, 1u, "\uD83D\uDE00".repeat(40))
+        "hello.clamped.exactly63" -> Packet.encodeHello(commitment, 1u, "é".repeat(31) + "a")
+        "hello.clamped.overByOne" -> Packet.encodeHello(commitment, 1u, "é".repeat(32))
+        "hello.clamped.trimmed" -> Packet.encodeHello(commitment, 1u, "  Ada's Mac \t\n")
+        "hello.clamped.blank" -> Packet.encodeHello(commitment, 1u, " \t\r\n ")
         "welcome" -> Packet.encodeWelcome(0xD002u, mediaKey, ByteArray(32) { (0x40 + it).toByte() })
+        "hostNonce" -> Packet.encodeHostNonce(hostNonce)
+        "reveal" -> Packet.encodeReveal(token)
 
         "chunk.video" -> ChunkHeader.encode(videoFields)
         "chunk.message" -> ChunkHeader.encode(messageFields)
@@ -219,12 +273,20 @@ class PacketVectorsTest {
         "seal.video" -> MediaSeal.seal(videoFields, ByteArray(16) { it.toByte() }, mediaKey, 0u)
         "seal.message" -> MediaSeal.seal(messageFields, Packet.needKeyframeMessage, mediaKey, 0u)
         "seal.ping" -> MediaSeal.seal(pingFields, ByteArray(0), mediaKey, 0u)
+        // A counter with its top half set: the only vector that would notice a
+        // 32-bit read, or a signed one on the JVM.
+        "seal.counterMax" -> MediaSeal.seal(
+            ChunkHeader.Fields(ChunkHeader.Kind.VIDEO, ULong.MAX_VALUE, 0x01020304u, 2u, 150u),
+            ByteArray(16) { it.toByte() }, mediaKey, 0u,
+        )
 
         // Six characters both screens show; here as the ASCII they are.
         "pairing.code" -> Pairing.code(
             ByteArray(32) { 0x11 }, ByteArray(32) { 0x22 },
-            UUID(0x3333333333333333L, 0x3333333333333333L),
+            UUID(0x3333333333333333L, 0x3333333333333333L), hostNonce,
         ).toByteArray(Charsets.US_ASCII)
+        // A commitment and the token it opens, as 48 bytes.
+        "commit.matches" -> commitment + uuidBytesOf(token)
 
         "frame.control" -> Framing.encode(Packet.needKeyframeMessage)
 
@@ -237,6 +299,17 @@ class PacketVectorsTest {
         val payload = byteArrayOf(0x00, 0x00, 0x00, 0x05, 0x65, 0x01, 0x02, 0x03, 0x04)
 
         val token: UUID = UUID.fromString("0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0")
+        val commitment: ByteArray = Pairing.commitment(token)
+        val hostNonce = ByteArray(16) { (0x50 + it).toByte() }
+
+        fun uuidBytesOf(u: UUID): ByteArray =
+            java.nio.ByteBuffer.allocate(16).putLong(u.mostSignificantBits)
+                .putLong(u.leastSignificantBits).array()
+
+        fun uuidFrom(b: ByteArray, o: Int): UUID {
+            val buf = java.nio.ByteBuffer.wrap(b, o, 16)
+            return UUID(buf.long, buf.long)
+        }
         val mediaKey = ByteArray(32) { it.toByte() }
         val videoFields = ChunkHeader.Fields(ChunkHeader.Kind.VIDEO, 7uL, 0x01020304u, 2u.toUShort(), 150u.toUShort())
         val messageFields = ChunkHeader.Fields(ChunkHeader.Kind.MESSAGE, 8uL, 0u, 0u.toUShort(), 1u.toUShort())
