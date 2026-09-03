@@ -31,7 +31,7 @@ class PacketVectorsTest {
         }
         // A short read must fail loudly rather than report a green suite over
         // half the format.
-        assertEquals(146, rows.size, "expected 146 vectors, parsed ${rows.size}")
+        assertEquals(169, rows.size, "expected 169 vectors, parsed ${rows.size}")
 
         return rows.map { (name, verdict, hex) ->
             DynamicTest.dynamicTest("$verdict $name") { check(name, verdict, unhex(hex)) }
@@ -93,6 +93,8 @@ class PacketVectorsTest {
             }
             is Packet.Message.Cursor -> Packet.encodeCursor(m.seq, m.sentMs, m.x, m.y)
             is Packet.Message.CursorHidden -> Packet.encodeCursorHidden(m.seq)
+            is Packet.Message.TypeText -> Packet.encodeTypeText(m.text)
+            is Packet.Message.Key -> Packet.encodeKey(m.key)
             is Packet.Message.Mark -> Packet.encodeMark(m.kind, m.x, m.y)
             is Packet.Message.RelayedMark -> Packet.encodeRelayedMark(m.slot, m.kind, m.x, m.y)
             is Packet.Message.Reaction -> Packet.encodeReaction(m.kind)
@@ -245,6 +247,25 @@ class PacketVectorsTest {
         "systemGesture.appWindows" -> Packet.encodeSystemGesture(Packet.SystemGesture.APP_WINDOWS)
         "systemGesture.spaceLeft" -> Packet.encodeSystemGesture(Packet.SystemGesture.SPACE_LEFT)
         "systemGesture.spaceRight" -> Packet.encodeSystemGesture(Packet.SystemGesture.SPACE_RIGHT)
+
+        // Typing. The length byte counts bytes and the text is characters, so
+        // the multi-byte cases are the ones that matter: "héllo" is five
+        // characters and six bytes, "ok 👍" four characters and seven.
+        "typeText.ascii" -> Packet.encodeTypeText("hello")
+        "typeText.oneByteChar" -> Packet.encodeTypeText("a")
+        "typeText.multiByte" -> Packet.encodeTypeText("héllo")
+        "typeText.emoji" -> Packet.encodeTypeText("ok \uD83D\uDC4D")
+        "typeText.newline" -> Packet.encodeTypeText("a\nb")
+        "typeText.maxLength" -> Packet.encodeTypeText("x".repeat(255))
+
+        "key.backspace" -> Packet.encodeKey(Packet.Key.BACKSPACE)
+        "key.enter" -> Packet.encodeKey(Packet.Key.ENTER)
+        "key.tab" -> Packet.encodeKey(Packet.Key.TAB)
+        "key.escape" -> Packet.encodeKey(Packet.Key.ESCAPE)
+        "key.left" -> Packet.encodeKey(Packet.Key.LEFT)
+        "key.right" -> Packet.encodeKey(Packet.Key.RIGHT)
+        "key.up" -> Packet.encodeKey(Packet.Key.UP)
+        "key.down" -> Packet.encodeKey(Packet.Key.DOWN)
 
         // The token is a UUID in RFC 4122 byte order — the same bytes its
         // string form spells — so both sides can key a trust store by the string.

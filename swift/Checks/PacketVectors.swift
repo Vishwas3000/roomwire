@@ -210,6 +210,21 @@ enum PacketVectors {
         for g in Packet.SystemGesture.allCases {
             encode("systemGesture.\(g)", Packet.encodeSystemGesture(g))
         }
+
+        // Typing. The interesting cases are all about the length byte meaning
+        // *bytes* and the text being measured in characters: one emoji is four
+        // bytes and one character, and a decoder that confuses the two either
+        // truncates somebody's sentence or walks off the end of the frame.
+        encode("typeText.ascii", Packet.encodeTypeText("hello")!)
+        encode("typeText.oneByteChar", Packet.encodeTypeText("a")!)
+        encode("typeText.multiByte", Packet.encodeTypeText("héllo")!)
+        encode("typeText.emoji", Packet.encodeTypeText("ok 👍")!)
+        encode("typeText.newline", Packet.encodeTypeText("a\nb")!)
+        encode("typeText.maxLength", Packet.encodeTypeText(String(repeating: "x", count: 255))!)
+
+        for k in Packet.Key.allCases {
+            encode("key.\(k)", Packet.encodeKey(k))
+        }
     }
 
     // MARK: - Transport, ids 19 and 20
@@ -452,7 +467,23 @@ enum PacketVectors {
         // 23 is reserved for a second hello and nothing is allocated past it.
         // An unknown id must not be mistaken for the nearest one that happens
         // to be the right length.
-        reject("id.reserved23", Data([23, 1]))
+        // Was id.reserved23 until typing was allocated there. Still refused,
+        // and now for a better reason: a length byte claiming one byte of text
+        // with no text after it.
+        reject("typeText.lengthNoBody", Data([23, 1]))
+        // Typing, refused.
+        reject("typeText.empty", Data([23, 0]))
+        reject("typeText.lengthShort", Data([23, 5]) + Data("hi".utf8))
+        reject("typeText.lengthLong", Data([23, 2]) + Data("hello".utf8))
+        reject("typeText.headerOnly", Data([23]))
+        // A lone continuation byte is not UTF-8, and text nobody can decode is
+        // not text the presenter's Mac should be asked to type.
+        reject("typeText.notUtf8", Data([23, 1, 0x80]))
+        reject("typeText.truncatedEmoji", Data([23, 2, 0xF0, 0x9F]))
+        reject("key.unknown", Data([24, 99]))
+        reject("key.headerOnly", Data([24]))
+        reject("key.long", Data([24, 0, 0]))
+
         reject("id.unallocated200", Data([200]))
         reject("id.empty", Data())
     }
@@ -534,6 +565,8 @@ enum PacketVectors {
         case .requestControl: return Packet.requestControlMessage
         case .controlGranted(let granted): return Packet.encodeControlGranted(granted)
         case .systemGesture(let g): return Packet.encodeSystemGesture(g)
+        case .typeText(let text): return Packet.encodeTypeText(text) ?? Data()
+        case .key(let which): return Packet.encodeKey(which)
         case .hello(let commitment, let port, let name):
             return Packet.encodeHello(commitment: commitment, udpPort: port, name: name)
         case .welcome(let port, let key, let fingerprint):

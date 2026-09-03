@@ -113,6 +113,18 @@ public enum Packet {
         case missionControl = 0, appWindows = 1, spaceLeft = 2, spaceRight = 3
     }
 
+    /// The keys that produce no text, and therefore cannot ride in `typeText`.
+    ///
+    /// Deliberately short. Everything a person types is characters and goes as
+    /// text; this is only the keys that *do* something rather than insert
+    /// something. Adding a full keycode table would mean shipping a keymap and
+    /// agreeing on one across two platforms, to gain keys a phone has no way to
+    /// press.
+    public enum Key: UInt8, CaseIterable {
+        case backspace = 0, enter = 1, tab = 2, escape = 3
+        case left = 4, right = 5, up = 6, down = 7
+    }
+
     /// Everything either end can receive. Byte 0 tells them apart:
     /// 0/1 video (bit0 = keyframe), 2 pointer position, 3 pointer gone,
     /// 4 a viewer's mark, 5 that mark relayed to the other viewers,
@@ -191,6 +203,18 @@ public enum Packet {
         case controlGranted(Bool)                                       // host -> viewer
         /// Three fingers, meaning what they mean on a trackpad.
         case systemGesture(SystemGesture)                               // viewer -> host
+        /// Text for the presenter's Mac to type, exactly as given.
+        ///
+        /// Characters rather than keystrokes, because that is what the sender
+        /// actually has: a phone's soft keyboard reports what was composed, not
+        /// which keys were pressed, and for most of the world's scripts those
+        /// are not the same question. macOS types a string directly, so no
+        /// keymap has to be agreed on or shipped. Non-empty, and at most
+        /// `maxTextBytes` of UTF-8 — the sender splits anything longer on a
+        /// character boundary.
+        case typeText(String)                                           // viewer -> host
+        /// A key that does something rather than inserting something.
+        case key(Key)                                                   // viewer -> host
         /// The first frame on the control lane, within five seconds of TLS
         /// coming up.
         ///
@@ -246,6 +270,10 @@ public enum Packet {
 
     /// The most a display name may occupy on the wire, in UTF-8 bytes.
     public static let maxNameBytes = 63
+    /// One byte carries the length, so 255 is the ceiling the format gives.
+    /// Typing is not bulk transfer; a burst longer than this is several
+    /// messages, split by the sender where a character ends.
+    public static let maxTextBytes = 255
 
     public static func decodeMessage(_ data: Data) -> Message? {
         switch data.first {
@@ -351,6 +379,19 @@ public enum Packet {
             let port = be16(b, 1)
             guard port != 0 else { return nil }
             return .welcome(udpPort: port, mediaKey: Data(b[3 ..< 35]), hostFingerprint: Data(b[35 ..< 67]))
+        case 23:
+            let b = [UInt8](data)
+            // Same shape as a name, and refused the same way: the frame must be
+            // exactly the length it claims, and bytes that are not UTF-8 are
+            // not text anyone can type.
+            guard b.count >= 3, (1 ... maxTextBytes).contains(Int(b[1])),
+                  b.count == 2 + Int(b[1]),
+                  let text = String(validating: b[2...], as: UTF8.self) else { return nil }
+            return .typeText(text)
+        case 24:
+            let b = [UInt8](data)
+            guard b.count == 2, let which = Key(rawValue: b[1]) else { return nil }
+            return .key(which)
         case 21:
             let b = [UInt8](data)
             guard b.count == 17 else { return nil }
@@ -589,6 +630,18 @@ public enum Packet {
 
     public static func encodeSystemGesture(_ kind: SystemGesture) -> Data {
         Data([18, kind.rawValue])
+    }
+
+    /// nil for text that will not fit or is empty, so a caller cannot put a
+    /// frame on the wire that the far end is obliged to refuse.
+    public static func encodeTypeText(_ text: String) -> Data? {
+        let bytes = Array(text.utf8)
+        guard (1 ... maxTextBytes).contains(bytes.count) else { return nil }
+        return Data([23, UInt8(bytes.count)] + bytes)
+    }
+
+    public static func encodeKey(_ which: Key) -> Data {
+        Data([24, which.rawValue])
     }
 
     public static let identifyMessage = Data([9])

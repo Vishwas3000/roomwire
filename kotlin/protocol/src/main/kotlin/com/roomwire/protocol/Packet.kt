@@ -156,6 +156,23 @@ object Packet {
     }
 
     /**
+     * The keys that produce no text, and therefore cannot ride in TypeText.
+     *
+     * Deliberately short. Everything a person types is characters and goes as
+     * text; this is only the keys that do something rather than insert
+     * something. A full keycode table would mean shipping a keymap and agreeing
+     * on one across two platforms, to gain keys a phone cannot press.
+     */
+    enum class Key(val raw: UByte) {
+        BACKSPACE(0u), ENTER(1u), TAB(2u), ESCAPE(3u),
+        LEFT(4u), RIGHT(5u), UP(6u), DOWN(7u);
+
+        companion object {
+            fun of(raw: UByte): Key? = Key.entries.firstOrNull { it.raw == raw }
+        }
+    }
+
+    /**
      * Everything either end can receive. Byte 0 tells them apart:
      * 0/1 video (bit0 = keyframe), 2 pointer position, 3 pointer gone,
      * 4 a viewer's mark, 5 that mark relayed to the other viewers, 6 a
@@ -296,6 +313,18 @@ object Packet {
         data object RequestControl : Message
 
         /**
+         * viewer -> host. Text for the presenter's Mac to type, exactly as
+         * given. Characters rather than keystrokes, because that is what the
+         * sender has: a soft keyboard reports what was composed, not which keys
+         * were pressed, and for most of the world's scripts those are not the
+         * same question.
+         */
+        data class TypeText(val text: String) : Message
+
+        /** viewer -> host. A key that does something rather than inserting something. */
+        data class Key(val key: Packet.Key) : Message
+
+        /**
          * host -> viewer. Granted or taken away. Sent on every change,
          * including the automatic ones: leaving, being moved to another screen,
          * or the presenter simply touching their own mouse.
@@ -374,6 +403,13 @@ object Packet {
 
     /** The most a display name may occupy on the wire, in UTF-8 bytes. */
     const val MAX_NAME_BYTES = 63
+
+    /**
+     * One byte carries the length, so 255 is the ceiling the format gives.
+     * Typing is not bulk transfer; a longer burst is several messages, split by
+     * the sender where a character ends.
+     */
+    const val MAX_TEXT_BYTES = 255
 
     fun decodeMessage(b: ByteArray): Message? {
         when (b.firstOrNull()?.toUByte()?.toInt()) {
@@ -491,6 +527,19 @@ object Packet {
             21 -> {
                 if (b.size != 17) return null
                 return Message.HostNonce(b.copyOfRange(1, 17))
+            }
+            23 -> {
+                // Same shape as a name, refused the same way: exactly the
+                // length it claims, and bytes that are not UTF-8 are not text
+                // anyone can type.
+                if (b.size < 3) return null
+                val len = b.u(1).toInt()
+                if (len !in 1..MAX_TEXT_BYTES || b.size != 2 + len) return null
+                return Message.TypeText(strictUtf8(b, 2, b.size) ?: return null)
+            }
+            24 -> {
+                if (b.size != 2) return null
+                return Message.Key(Key.of(b.u(1)) ?: return null)
             }
             22 -> {
                 if (b.size != 17) return null
@@ -728,6 +777,46 @@ object Packet {
 
     fun encodeSystemGesture(kind: SystemGesture): ByteArray =
         byteArrayOf(18, kind.raw.toByte())
+
+    /**
+     * null for text that is empty or will not fit, so a caller cannot put a
+     * frame on the wire the far end is obliged to refuse. Split longer text
+     * with [splitForTyping], which cuts where a character ends.
+     */
+    fun encodeTypeText(text: String): ByteArray? {
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        if (bytes.size !in 1..MAX_TEXT_BYTES) return null
+        return byteArrayOf(23, bytes.size.toByte()) + bytes
+    }
+
+    fun encodeKey(key: Key): ByteArray = byteArrayOf(24, key.raw.toByte())
+
+    /**
+     * [text] in pieces that each fit one message, split between code points so
+     * a multi-byte character is never cut in half — half a character is not
+     * UTF-8, and the far end would refuse the whole frame.
+     */
+    fun splitForTyping(text: String): List<String> {
+        val out = mutableListOf<String>()
+        val piece = StringBuilder()
+        var bytes = 0
+        var i = 0
+        while (i < text.length) {
+            val point = text.codePointAt(i)
+            val chars = Character.charCount(point)
+            val width = String(Character.toChars(point)).toByteArray(Charsets.UTF_8).size
+            if (bytes + width > MAX_TEXT_BYTES) {
+                out.add(piece.toString())
+                piece.setLength(0)
+                bytes = 0
+            }
+            piece.appendCodePoint(point)
+            bytes += width
+            i += chars
+        }
+        if (piece.isNotEmpty()) out.add(piece.toString())
+        return out
+    }
 
     fun encode(
         payload: ByteArray,
