@@ -5,6 +5,7 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.util.Log
 import com.roomwire.protocol.Packet
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -109,12 +110,16 @@ class AndroidViewer(
         joining = scope.launch {
             _state.value = ViewerState.Connecting(host)
             val address = host.address
+            Log.i(LOG, "join ${host.name} addr=$address port=${host.port}")
             if (address == null) {
                 _state.value = ViewerState.Failed("that host has no address yet")
                 return@launch
             }
             runCatching { open(host, address, token, Packet.clampName(name)) }
-                .onFailure { _state.value = ViewerState.Failed(it.message ?: "could not connect") }
+                .onFailure {
+                    Log.w(LOG, "join failed: ${it::class.java.simpleName}: ${it.message}", it)
+                    _state.value = ViewerState.Failed(it.message ?: "could not connect")
+                }
         }
     }
 
@@ -192,7 +197,17 @@ class AndroidViewer(
                 }
             }
         }
+        control.onFailed = { why ->
+            Log.w(LOG, "control lane failed: ${why::class.java.simpleName}: ${why.message}", why)
+            scope.launch {
+                if (_state.value !is ViewerState.Connected) {
+                    _state.value = ViewerState.Failed(why.message ?: "could not reach that Mac")
+                }
+            }
+        }
+        Log.i(LOG, "connecting to $address:${host.port}")
         control.connect(address, host.port)
+        Log.i(LOG, "control lane handed the socket")
     }
 
     private fun cancelJoin() {
@@ -214,6 +229,8 @@ class AndroidViewer(
                 val version = txt["v"]?.toString(Charsets.UTF_8)?.toIntOrNull() ?: return
                 if (version != PROTOCOL_VERSION) return
                 val display = txt["name"]?.toString(Charsets.UTF_8) ?: updated.serviceName
+                Log.i(LOG, "resolved ${updated.serviceName} v$version " +
+                    "addrs=${updated.hostAddresses} port=${updated.port}")
                 val address = updated.hostAddresses.firstOrNull() ?: return
                 scope.launch {
                     seen[updated.serviceName] = DiscoveredHost(
@@ -263,6 +280,7 @@ class AndroidViewer(
     }
 
     private companion object {
+        const val LOG = "roomwire"
         const val SERVICE_TYPE = "_roomwire._tcp."
         const val PROTOCOL_VERSION = 1
     }

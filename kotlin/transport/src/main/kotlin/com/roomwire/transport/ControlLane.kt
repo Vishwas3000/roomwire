@@ -44,6 +44,16 @@ class ControlLane(
     /** The address the handshake actually reached, which is where the media lane goes. */
     val remoteAddress: InetAddress? get() = socket?.inetAddress
 
+    /**
+     * Why the lane ended, when it ended badly. `connect` returns the moment the
+     * coroutine is launched, so everything that can actually go wrong — a
+     * refused connect, a handshake the host rejected, a certificate neither end
+     * would accept — happens after the caller has moved on. Without this the
+     * viewer sits in Connecting forever and there is nothing, anywhere, saying
+     * why. Not called for an ordinary close.
+     */
+    var onFailed: ((Throwable) -> Unit)? = null
+
     fun connect(host: InetAddress, port: Int, timeoutMs: Int = 15_000) {
         reader = scope.launch(Dispatchers.IO) {
             val decoder = Framing.Decoder()
@@ -70,8 +80,12 @@ class ControlLane(
                         ?: break
                     for (message in messages) onMessage?.invoke(message)
                 }
-            } catch (e: IOException) {
-                // Every way this ends is the same way: the lane is gone.
+            } catch (e: Throwable) {
+                // Throwable, not IOException: a Keystore that will not sign and
+                // a certificate that will not parse are not IOExceptions, and
+                // they used to vanish into the coroutine leaving the viewer
+                // stuck on a screen that says Connecting.
+                if (!closed) onFailed?.invoke(e)
             } finally {
                 close()
             }
