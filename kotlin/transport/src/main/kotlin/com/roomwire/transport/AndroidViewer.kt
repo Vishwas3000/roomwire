@@ -175,6 +175,21 @@ class AndroidViewer(
                     is Handshake.Step.Ready -> {
                         knownHosts.remember(host.name, live.peer.fingerprintHex)
                         media.connect(address, step.hostPort, step.mediaKey)
+                        // Connected here, on welcome, rather than on the first
+                        // datagram. Welcome *is* the host saying it admitted
+                        // this viewer; waiting for video conflated "approved"
+                        // with "there is something to show", and a host that
+                        // had approved but was not yet sending left the pairing
+                        // code on screen under the words "Approve on the Mac to
+                        // continue" — by then a lie, and one the presenter
+                        // could do nothing about because they already had.
+                        // The gap between admitted and the first frame belongs
+                        // to the watch screen, which has a state for it.
+                        scope.launch {
+                            if (_state.value !is ViewerState.Connected) {
+                                _state.value = ViewerState.Connected(live)
+                            }
+                        }
                     }
                     is Handshake.Step.Fail -> scope.launch {
                         live.close()
