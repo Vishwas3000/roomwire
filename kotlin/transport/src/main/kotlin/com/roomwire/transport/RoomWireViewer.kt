@@ -57,7 +57,20 @@ enum class Reliability { RELIABLE, UNRELIABLE }
  * record's protocol version, and only 1 is spoken today; [serviceName] is the
  * Bonjour instance name, which is what a join actually resolves.
  */
-data class DiscoveredHost(val name: String, val version: Int, val serviceName: String)
+data class DiscoveredHost(val name: String, val version: Int, val serviceName: String) {
+    /**
+     * Filled in by discovery once the service resolves. Not part of the value —
+     * two hosts are the same host if they have the same name and service name,
+     * whatever address they happen to be on this minute — and not in the
+     * constructor, because this type is what an app pattern-matches on and its
+     * shape is frozen.
+     */
+    @Transient
+    var address: java.net.InetAddress? = null
+
+    @Transient
+    var port: Int = 0
+}
 
 /**
  * The far end of a live session. [id] is the host's pairing identity as a
