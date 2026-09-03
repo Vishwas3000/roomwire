@@ -51,13 +51,20 @@ class MediaLane(private val scope: CoroutineScope) {
      * would be used again with a counter that restarts at 1.
      */
     fun connect(host: java.net.InetAddress, hostPort: Int, key: ByteArray) {
+        // Local only — a connected UDP socket sends nothing — but StrictMode
+        // counts it, and the caller is on the main thread.
         channel.connect(InetSocketAddress(host, hostPort))
         sealer = MediaSeal.Sealer(key, MediaSeal.Role.VIEWER)
         opener = MediaSeal.Opener(key, MediaSeal.Role.VIEWER)
         reader = scope.launch(Dispatchers.IO) { read() }
         // The host is already pinging; answering is what makes the lane
         // two-way. A NAT or a firewall between the two shows up exactly here.
-        pinger = scope.launch {
+        // Dispatchers.IO, exactly like the reader above it: connect() is called
+        // from the control lane's callback, which reaches here on the main
+        // thread, and a datagram written there is NetworkOnMainThreadException
+        // — a crash at the moment pairing succeeds, which is the worst possible
+        // moment to have one.
+        pinger = scope.launch(Dispatchers.IO) {
             while (isActive && !live) {
                 ping()
                 delay(1000)
@@ -87,6 +94,19 @@ class MediaLane(private val scope: CoroutineScope) {
     }
 
     private fun write(datagram: ByteArray) {
+        // Off the caller's thread, always. Every datagram this lane sends
+        // arrives through here, and the callers are the app's — send() runs
+        // wherever a ViewModel happens to be, which on Android is the main
+        // thread, and StrictMode kills the process for a socket write there.
+        // One place to get this right rather than one per call site.
+        //
+        // ponytail: a coroutine per datagram, which is fine because a viewer
+        // sends no video — pings, telemetry and keyframe requests, a handful a
+        // second. A host on this lane would want a single writer thread.
+        scope.launch(Dispatchers.IO) { writeNow(datagram) }
+    }
+
+    private fun writeNow(datagram: ByteArray) {
         try {
             channel.write(ByteBuffer.wrap(datagram))
         } catch (e: IOException) {
