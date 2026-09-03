@@ -1,5 +1,10 @@
 package com.roomwire.protocol
 
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
+import java.util.UUID
 import kotlin.math.roundToInt
 
 /**
@@ -160,7 +165,9 @@ object Packet {
      * saw a sequence gap asking for a cheap recovery frame, 12 a viewer's
      * per-frame flight records for the last second, 13 the pointer probe's
      * paired timelines, 14 a controlling viewer's pointer, 15 its scrolling,
-     * 16 a viewer asking for control, 17 the presenter's answer.
+     * 16 a viewer asking for control, 17 the presenter's answer, 18 a
+     * three-finger gesture, 19 a viewer introducing itself to the transport,
+     * 20 the transport's answer once the viewer is admitted.
      *
      * Coordinates are always normalized within the watched screen, so they
      * survive any difference in resolution or zoom between the two ends.
@@ -290,7 +297,31 @@ object Packet {
 
         /** viewer -> host. Three fingers, meaning what they mean on a trackpad. */
         data class SystemGesture(val kind: Packet.SystemGesture) : Message
+
+        /**
+         * viewer -> host. The first frame on the control lane, within five
+         * seconds of TLS coming up. [token] is the viewer's pairing identity —
+         * the key the host's trust store is indexed by — and [udpPort] is where
+         * the viewer is already listening for the media lane: the host dials
+         * it, so no viewer ever needs a listener the host can find. Port 0
+         * dials nowhere and is refused. The name is 1…63 bytes of UTF-8, shown
+         * to the presenter when asked to approve; more is truncated on the way
+         * out and refused on the way in.
+         */
+        data class Hello(val token: UUID, val udpPort: UShort, val name: String) : Message
+
+        /**
+         * host -> viewer. Sent only once the viewer is approved: where the
+         * host's own end of the media lane sits, a fresh 32-byte key for that
+         * lane — one per viewer, because a shared key with independent
+         * counters would reuse a nonce — and the SHA-256 of the host's own
+         * certificate, which the viewer checks against the one TLS showed it.
+         */
+        class Welcome(val udpPort: UShort, val mediaKey: ByteArray, val hostFingerprint: ByteArray) : Message
     }
+
+    /** The most a display name may occupy on the wire, in UTF-8 bytes. */
+    const val MAX_NAME_BYTES = 63
 
     fun decodeMessage(b: ByteArray): Message? {
         when (b.firstOrNull()?.toUByte()?.toInt()) {
@@ -386,8 +417,75 @@ object Packet {
                 if (b.size != 2) return null
                 return Message.SystemGesture(SystemGesture.of(b.u(1)) ?: return null)
             }
+            19 -> {
+                // The name length is a byte the peer wrote; the frame must be
+                // exactly what it claims, the port must dial somewhere, and the
+                // name must be text — bytes that are not UTF-8 are not a name we
+                // can show anyone.
+                if (b.size < 20) return null
+                val nameLen = b.u(19).toInt()
+                if (nameLen !in 1..MAX_NAME_BYTES || b.size != 20 + nameLen) return null
+                val port = b.be16(17)
+                if (port == 0u.toUShort()) return null
+                val name = strictUtf8(b, 20, b.size) ?: return null
+                val buf = ByteBuffer.wrap(b, 1, 16)
+                return Message.Hello(UUID(buf.long, buf.long), port, name)
+            }
+            20 -> {
+                if (b.size != 67) return null
+                val port = b.be16(1)
+                if (port == 0u.toUShort()) return null
+                return Message.Welcome(port, b.copyOfRange(3, 35), b.copyOfRange(35, 67))
+            }
             else -> return null
         }
+    }
+
+    /**
+     * The name is cut to [MAX_NAME_BYTES] of UTF-8 on a code point boundary, so
+     * a long name loses its tail rather than the whole hello being refused at
+     * the far end. An empty name reads as "?": the format needs one byte.
+     */
+    fun encodeHello(token: UUID, udpPort: UShort, name: String): ByteArray {
+        val out = mutableListOf<Byte>(19)
+        out.addAll(uuidBytes(token).asList())
+        out.appendBE16(udpPort)
+        val bytes = nameBytes(name)
+        out.add(bytes.size.toByte())
+        out.addAll(bytes.asList())
+        return out.toByteArray()
+    }
+
+    /** [mediaKey] and [hostFingerprint] are 32 bytes each; anything else is a programming error. */
+    fun encodeWelcome(udpPort: UShort, mediaKey: ByteArray, hostFingerprint: ByteArray): ByteArray {
+        require(mediaKey.size == 32 && hostFingerprint.size == 32) { "welcome carries two 32-byte values" }
+        val out = mutableListOf<Byte>(20)
+        out.appendBE16(udpPort)
+        return out.toByteArray() + mediaKey + hostFingerprint
+    }
+
+    /** UTF-8 of [name], at most [MAX_NAME_BYTES], cut between code points; "?" if empty. */
+    internal fun nameBytes(name: String): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        var i = 0
+        while (i < name.length) {
+            val cp = name.codePointAt(i)
+            val bytes = String(Character.toChars(cp)).toByteArray(StandardCharsets.UTF_8)
+            if (out.size() + bytes.size > MAX_NAME_BYTES) break
+            out.write(bytes)
+            i += Character.charCount(cp)
+        }
+        return if (out.size() == 0) byteArrayOf(0x3F) else out.toByteArray()
+    }
+
+    /** null for anything that is not well-formed UTF-8; String(bytes) would quietly substitute. */
+    private fun strictUtf8(b: ByteArray, from: Int, to: Int): String? = try {
+        StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(b, from, to - from)).toString()
+    } catch (e: CharacterCodingException) {
+        null
     }
 
     /**
@@ -626,42 +724,49 @@ object Packet {
      */
     private fun fixed16(v: Double): UShort =
         if (v.isNaN()) 0u else (v.coerceIn(0.0, 1.0) * 65535).roundToInt().toUShort()
-
-    private fun ByteArray.u(o: Int): UByte = this[o].toUByte()
-
-    private fun ByteArray.be16(o: Int): UShort =
-        (((this[o].toInt() and 0xFF) shl 8) or (this[o + 1].toInt() and 0xFF)).toUShort()
-
-    private fun ByteArray.be32(o: Int): UInt =
-        ((this[o].toInt() and 0xFF).toUInt() shl 24) or
-            ((this[o + 1].toInt() and 0xFF).toUInt() shl 16) or
-            ((this[o + 2].toInt() and 0xFF).toUInt() shl 8) or
-            (this[o + 3].toInt() and 0xFF).toUInt()
-
-    private fun ByteArray.be64(o: Int): ULong =
-        (be32(o).toULong() shl 32) or be32(o + 4).toULong()
-
-    private fun MutableList<Byte>.appendPoint(x: Double, y: Double) {
-        appendBE(x.coerceIn(0.0, 1.0).toFloat().toRawBits().toUInt())
-        appendBE(y.coerceIn(0.0, 1.0).toFloat().toRawBits().toUInt())
-    }
-
-    private fun MutableList<Byte>.appendBE64(v: ULong) {
-        appendBE((v shr 32).toUInt())
-        appendBE(v.toUInt())
-    }
-
-    private fun MutableList<Byte>.appendBE16(v: UShort) {
-        val i = v.toInt()
-        add((i shr 8).toByte())
-        add(i.toByte())
-    }
-
-    private fun MutableList<Byte>.appendBE(v: UInt) {
-        val i = v.toInt()
-        add((i shr 24).toByte())
-        add((i shr 16).toByte())
-        add((i shr 8).toByte())
-        add(i.toByte())
-    }
 }
+
+// Everything is big endian; there are no exceptions. Shared with the media
+// lane's header and envelope and the control lane's framing.
+
+internal fun ByteArray.u(o: Int): UByte = this[o].toUByte()
+
+internal fun ByteArray.be16(o: Int): UShort =
+    (((this[o].toInt() and 0xFF) shl 8) or (this[o + 1].toInt() and 0xFF)).toUShort()
+
+internal fun ByteArray.be32(o: Int): UInt =
+    ((this[o].toInt() and 0xFF).toUInt() shl 24) or
+        ((this[o + 1].toInt() and 0xFF).toUInt() shl 16) or
+        ((this[o + 2].toInt() and 0xFF).toUInt() shl 8) or
+        (this[o + 3].toInt() and 0xFF).toUInt()
+
+internal fun ByteArray.be64(o: Int): ULong =
+    (be32(o).toULong() shl 32) or be32(o + 4).toULong()
+
+internal fun MutableList<Byte>.appendPoint(x: Double, y: Double) {
+    appendBE(x.coerceIn(0.0, 1.0).toFloat().toRawBits().toUInt())
+    appendBE(y.coerceIn(0.0, 1.0).toFloat().toRawBits().toUInt())
+}
+
+internal fun MutableList<Byte>.appendBE64(v: ULong) {
+    appendBE((v shr 32).toUInt())
+    appendBE(v.toUInt())
+}
+
+internal fun MutableList<Byte>.appendBE16(v: UShort) {
+    val i = v.toInt()
+    add((i shr 8).toByte())
+    add(i.toByte())
+}
+
+internal fun MutableList<Byte>.appendBE(v: UInt) {
+    val i = v.toInt()
+    add((i shr 24).toByte())
+    add((i shr 16).toByte())
+    add((i shr 8).toByte())
+    add(i.toByte())
+}
+
+/** A UUID as the 16 bytes its string form spells (RFC 4122 order). */
+internal fun uuidBytes(u: UUID): ByteArray =
+    ByteBuffer.allocate(16).putLong(u.mostSignificantBits).putLong(u.leastSignificantBits).array()

@@ -1,13 +1,13 @@
 package com.roomwire.protocol
 
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 import org.junit.jupiter.api.fail
 import java.io.File
+import java.util.UUID
 
 /**
  * protocol/vectors.txt is generated from the Swift implementation and read
@@ -31,7 +31,7 @@ class PacketVectorsTest {
         }
         // A short read must fail loudly rather than report a green suite over
         // half the format.
-        assertEquals(95, rows.size, "expected 95 vectors, parsed ${rows.size}")
+        assertEquals(127, rows.size, "expected 127 vectors, parsed ${rows.size}")
 
         return rows.map { (name, verdict, hex) ->
             DynamicTest.dynamicTest("$verdict $name") { check(name, verdict, unhex(hex)) }
@@ -43,11 +43,26 @@ class PacketVectorsTest {
             val built = encoded(name)
                 ?: fail("ENCODE vector '$name' has no construction here — the port is missing it")
             assertEquals(hex(bytes), hex(built), "$name: encoded bytes differ")
-            assertNotNull(Packet.decodeMessage(bytes), "$name: encoded bytes must also decode")
+            assertTrue(decodes(name, bytes), "$name: encoded bytes must also decode")
         }
-        "ACCEPT" -> assertNotNull(Packet.decodeMessage(bytes), "$name: refused bytes it must accept")
-        "REJECT" -> assertNull(Packet.decodeMessage(bytes), "$name: accepted bytes it must refuse")
+        "ACCEPT" -> assertTrue(decodes(name, bytes), "$name: refused bytes it must accept")
+        "REJECT" -> assertFalse(decodes(name, bytes), "$name: accepted bytes it must refuse")
         else -> fail("unknown verdict '$verdict' for '$name'")
+    }
+
+    /**
+     * Which decoder a vector is held to; the name's prefix says, exactly as in
+     * PacketVectors.swift. Messages by default; `chunk.` the media header;
+     * `seal.` the sealed datagram, opened with key 00…1f on lane 0 — except
+     * `seal.wrongLane`, opened on lane 1, which is the point of it; `frame.`
+     * the control lane's framing; `pairing.` is text with no decoder.
+     */
+    private fun decodes(name: String, bytes: ByteArray): Boolean = when {
+        name.startsWith("chunk.") -> ChunkHeader.decode(bytes) != null
+        name.startsWith("seal.") -> MediaSeal.open(bytes, mediaKey, if (name == "seal.wrongLane") 1u else 0u) != null
+        name.startsWith("frame.") -> Framing.Decoder().feed(bytes) != null
+        name.startsWith("pairing.") -> true
+        else -> Packet.decodeMessage(bytes) != null
     }
 
     // The inputs live in both languages; the bytes live in vectors.txt. Inputs
@@ -179,6 +194,30 @@ class PacketVectorsTest {
         "systemGesture.spaceLeft" -> Packet.encodeSystemGesture(Packet.SystemGesture.SPACE_LEFT)
         "systemGesture.spaceRight" -> Packet.encodeSystemGesture(Packet.SystemGesture.SPACE_RIGHT)
 
+        // The token is a UUID in RFC 4122 byte order — the same bytes its
+        // string form spells — so both sides can key a trust store by the string.
+        "hello" -> Packet.encodeHello(token, 0xC001u, "Ada’s Pixel")
+        "hello.longName" -> Packet.encodeHello(token, 1u, "n".repeat(63))
+        "welcome" -> Packet.encodeWelcome(0xD002u, mediaKey, ByteArray(32) { (0x40 + it).toByte() })
+
+        "chunk.video" -> ChunkHeader.encode(videoFields)
+        "chunk.message" -> ChunkHeader.encode(messageFields)
+        "chunk.ping" -> ChunkHeader.encode(pingFields)
+
+        // ChaCha20-Poly1305 is deterministic in key, nonce, header and body. Key
+        // 00…1f, lane 0 (host to viewer).
+        "seal.video" -> MediaSeal.seal(videoFields, ByteArray(16) { it.toByte() }, mediaKey, 0u)
+        "seal.message" -> MediaSeal.seal(messageFields, Packet.needKeyframeMessage, mediaKey, 0u)
+        "seal.ping" -> MediaSeal.seal(pingFields, ByteArray(0), mediaKey, 0u)
+
+        // Six characters both screens show; here as the ASCII they are.
+        "pairing.code" -> Pairing.code(
+            ByteArray(32) { 0x11 }, ByteArray(32) { 0x22 },
+            UUID(0x3333333333333333L, 0x3333333333333333L),
+        ).toByteArray(Charsets.US_ASCII)
+
+        "frame.control" -> Framing.encode(Packet.needKeyframeMessage)
+
         else -> null
     }
 
@@ -186,6 +225,12 @@ class PacketVectorsTest {
         val sps = byteArrayOf(0x67, 0x64, 0x00, 0x1f)
         val pps = byteArrayOf(0x68, 0xeb.toByte(), 0xe3.toByte(), 0xcb.toByte())
         val payload = byteArrayOf(0x00, 0x00, 0x00, 0x05, 0x65, 0x01, 0x02, 0x03, 0x04)
+
+        val token: UUID = UUID.fromString("0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0")
+        val mediaKey = ByteArray(32) { it.toByte() }
+        val videoFields = ChunkHeader.Fields(ChunkHeader.Kind.VIDEO, 7uL, 0x01020304u, 2u.toUShort(), 150u.toUShort())
+        val messageFields = ChunkHeader.Fields(ChunkHeader.Kind.MESSAGE, 8uL, 0u, 0u.toUShort(), 1u.toUShort())
+        val pingFields = ChunkHeader.Fields(ChunkHeader.Kind.PING, 9uL, 0u, 0u.toUShort(), 1u.toUShort())
 
         fun unhex(s: String) = ByteArray(s.length / 2) {
             s.substring(it * 2, it * 2 + 2).toInt(16).toByte()

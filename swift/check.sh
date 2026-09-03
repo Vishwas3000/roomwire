@@ -21,7 +21,8 @@ swiftc $src/Packet.swift Checks/PacketCheck.swift -o "$out/packet"
 # change must show up as a diff in a checked-in file, not as a corrupt frame on
 # a phone three months from now. If this fails and the change was deliberate,
 # commit the new protocol/vectors.txt *with* the Kotlin side.
-swiftc $src/Packet.swift Checks/PacketVectors.swift -o "$out/vectors"
+swiftc $src/Packet.swift $src/Chunk.swift $src/MediaSeal.swift $src/Pairing.swift \
+    Checks/PacketVectors.swift -o "$out/vectors"
 "$out/vectors" > "$out/vectors.txt"
 if ! diff -u ../protocol/vectors.txt "$out/vectors.txt"; then
     echo "check.sh: the wire format moved. See the diff above."
@@ -32,7 +33,7 @@ fi
 # then"; a transcript can. Same discipline as the vectors: regenerate, diff,
 # and a change must land in a checked-in file alongside the Kotlin side.
 swiftc $src/Packet.swift $src/ChainGate.swift $src/Pacer.swift $src/CursorMotion.swift $src/Pointer.swift \
-    Checks/TranscriptVectors.swift -o "$out/transcripts"
+    $src/Chunk.swift Checks/TranscriptVectors.swift -o "$out/transcripts"
 "$out/transcripts" > "$out/transcripts.txt"
 if ! diff -u ../protocol/transcripts.txt "$out/transcripts.txt"; then
     echo "check.sh: behaviour moved. See the diff above."
@@ -60,5 +61,11 @@ swiftc $src/ChainGate.swift Checks/ChainGateCheck.swift -o "$out/chaingate"
 # mask read back into the edges a desktop wants.
 swiftc $src/Packet.swift $src/Pointer.swift Checks/PointerCheck.swift -o "$out/pointer"
 "$out/pointer"
+
+# The media lane's pure half: a frame cut into datagrams comes back
+# byte-identical in any order, a hole is never delivered, the envelope refuses a
+# flipped bit anywhere, and the replay window forgets exactly what it should.
+swiftc $src/Packet.swift $src/Chunk.swift $src/MediaSeal.swift Checks/MediaLaneCheck.swift -o "$out/medialane"
+"$out/medialane"
 
 echo "swift: all checks passed"

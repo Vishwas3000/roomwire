@@ -191,7 +191,26 @@ public enum Packet {
         case controlGranted(Bool)                                       // host -> viewer
         /// Three fingers, meaning what they mean on a trackpad.
         case systemGesture(SystemGesture)                               // viewer -> host
+        /// The first frame on the control lane, within five seconds of TLS
+        /// coming up. `token` is the viewer's pairing identity — the key the
+        /// host's trust store is indexed by — and `udpPort` is where the
+        /// viewer is already listening for the media lane: the host dials it,
+        /// so no viewer ever needs a listener the host can find. Port 0 dials
+        /// nowhere and is refused. The name is 1…63 bytes of UTF-8, shown to
+        /// the presenter when asked to approve; more than that is truncated on
+        /// the way out and refused on the way in.
+        case hello(token: UUID, udpPort: UInt16, name: String)          // viewer -> host
+        /// The host's answer, sent only once the viewer is approved: where the
+        /// host's own end of the media lane sits, a fresh 32-byte key for that
+        /// lane — one per viewer, because a shared key with independent
+        /// counters would reuse a nonce — and the SHA-256 of the host's own
+        /// certificate, which the viewer checks against the one TLS actually
+        /// showed it.
+        case welcome(udpPort: UInt16, mediaKey: Data, hostFingerprint: Data) // host -> viewer
     }
+
+    /// The most a display name may occupy on the wire, in UTF-8 bytes.
+    public static let maxNameBytes = 63
 
     public static func decodeMessage(_ data: Data) -> Message? {
         switch data.first {
@@ -280,9 +299,62 @@ public enum Packet {
             let b = [UInt8](data)
             guard b.count == 2, let kind = SystemGesture(rawValue: b[1]) else { return nil }
             return .systemGesture(kind)
+        case 19:
+            let b = [UInt8](data)
+            // The name length is a byte the peer wrote; the frame must be
+            // exactly what it claims, the port must dial somewhere, and the
+            // name must be text — a byte sequence that is not UTF-8 is not a
+            // name we can show anyone.
+            guard b.count >= 20, (1 ... maxNameBytes).contains(Int(b[19])),
+                  b.count == 20 + Int(b[19]) else { return nil }
+            let port = be16(b, 17)
+            guard port != 0, let name = String(validating: b[20...], as: UTF8.self) else { return nil }
+            let token = Data(b[1 ... 16]).withUnsafeBytes { UUID(uuid: $0.load(as: uuid_t.self)) }
+            return .hello(token: token, udpPort: port, name: name)
+        case 20:
+            let b = [UInt8](data)
+            guard b.count == 67 else { return nil }
+            let port = be16(b, 1)
+            guard port != 0 else { return nil }
+            return .welcome(udpPort: port, mediaKey: Data(b[3 ..< 35]), hostFingerprint: Data(b[35 ..< 67]))
         default:
             return nil
         }
+    }
+
+    /// The name is cut to `maxNameBytes` of UTF-8 on a scalar boundary, so a
+    /// long name loses its tail rather than the whole hello being refused at
+    /// the far end. An empty name reads as "?": the format needs one byte.
+    public static func encodeHello(token: UUID, udpPort: UInt16, name: String) -> Data {
+        var out = Data([19])
+        out.append(contentsOf: withUnsafeBytes(of: token.uuid) { [UInt8]($0) })
+        out.appendBE16(udpPort)
+        let name = nameBytes(name)
+        out.append(UInt8(name.count))
+        out.append(contentsOf: name)
+        return out
+    }
+
+    /// `mediaKey` and `hostFingerprint` are 32 bytes each; anything else is a
+    /// programming error at the host, not network input, and traps.
+    public static func encodeWelcome(udpPort: UInt16, mediaKey: Data, hostFingerprint: Data) -> Data {
+        precondition(mediaKey.count == 32 && hostFingerprint.count == 32, "welcome carries two 32-byte values")
+        var out = Data([20])
+        out.appendBE16(udpPort)
+        out += mediaKey
+        out += hostFingerprint
+        return out
+    }
+
+    /// UTF-8 of `name`, at most `maxNameBytes`, cut between scalars; "?" if empty.
+    static func nameBytes(_ name: String) -> [UInt8] {
+        var out: [UInt8] = []
+        for scalar in name.unicodeScalars {
+            let bytes = Array(String(scalar).utf8)
+            if out.count + bytes.count > maxNameBytes { break }
+            out += bytes
+        }
+        return out.isEmpty ? [0x3F] : out
     }
 
     /// Two big-endian floats at `o`. Network input: a hostile coordinate would
@@ -444,15 +516,15 @@ public enum Packet {
         return out
     }
 
-    private static func be64(_ b: [UInt8], _ o: Int) -> UInt64 {
+    static func be64(_ b: [UInt8], _ o: Int) -> UInt64 {
         UInt64(be32(b, o)) << 32 | UInt64(be32(b, o + 4))
     }
 
-    private static func be16(_ b: [UInt8], _ o: Int) -> UInt16 {
+    static func be16(_ b: [UInt8], _ o: Int) -> UInt16 {
         UInt16(b[o]) << 8 | UInt16(b[o + 1])
     }
 
-    private static func be32(_ b: [UInt8], _ o: Int) -> UInt32 {
+    static func be32(_ b: [UInt8], _ o: Int) -> UInt32 {
         UInt32(b[o]) << 24 | UInt32(b[o + 1]) << 16 | UInt32(b[o + 2]) << 8 | UInt32(b[o + 3])
     }
 
@@ -501,7 +573,7 @@ public enum Packet {
     }
 }
 
-private extension Data {
+extension Data {
     mutating func appendPoint(_ x: Double, _ y: Double) {
         // Swift.-qualified: inside an extension on Data, bare min/max resolve to
         // Sequence's own no-argument versions.

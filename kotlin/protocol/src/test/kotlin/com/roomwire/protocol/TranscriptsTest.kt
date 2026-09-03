@@ -38,9 +38,10 @@ class TranscriptsTest {
             Row(f[0], f[1], f[2], f[3], f[4], line)
         }
         // A short read must fail loudly rather than pass over half the machines.
-        assertEquals(195, rows.size, "expected 195 steps, parsed ${rows.size}")
+        assertEquals(266, rows.size, "expected 266 steps, parsed ${rows.size}")
         assertEquals(
-            setOf("chaingate", "pacer", "cursor", "pointer", "touch"), rows.map { it.machine }.toSet(),
+            setOf("chaingate", "pacer", "cursor", "pointer", "touch", "reassembler", "replay"),
+            rows.map { it.machine }.toSet(),
             "every machine must appear — a missing one is an unported file",
         )
 
@@ -67,6 +68,8 @@ class TranscriptsTest {
         "cursor" -> CursorReplay()
         "pointer" -> PointerReplay()
         "touch" -> TouchReplay()
+        "reassembler" -> ReassemblerReplay()
+        "replay" -> ReplayWindowReplay()
         else -> fail("no replayer for machine '$machine'")
     }
 
@@ -150,6 +153,32 @@ class TranscriptsTest {
         }
         fun steps(out: List<TouchIntent.Step>) =
             if (out.isEmpty()) "-" else out.joinToString(";") { "step(${it.buttons},${pt(it.at)})" }
+    }
+
+    private class ReassemblerReplay : Replayer {
+        val r = Reassembler()
+        override fun step(op: String, a: Map<String, String>) = when (op) {
+            "absorb" -> {
+                // Byte k of slice `index` of frame `id` is (id + index + k) & 0xFF,
+                // as on the Swift side, so the sum is a check on what came out.
+                val id = a.u32("frame")
+                val index = a.u16("index")
+                val body = ByteArray(a.getValue("len").toInt()) { k -> (id.toLong() + index.toInt() + k).toByte() }
+                val h = ChunkHeader.Fields(ChunkHeader.Kind.VIDEO, 0uL, id, index, a.u16("count"))
+                r.absorb(h, body, a.d("now"))?.let {
+                    "delivered len=${it.size} sum=${it.fold(0) { s, b -> (s + (b.toInt() and 0xFF)) and 0xFFFF }}"
+                } ?: "nil"
+            }
+            else -> fail("reassembler: unknown op $op")
+        }
+    }
+
+    private class ReplayWindowReplay : Replayer {
+        val w = ReplayWindow()
+        override fun step(op: String, a: Map<String, String>) = when (op) {
+            "admit" -> if (w.admit(a.getValue("counter").toULong())) "accept" else "reject"
+            else -> fail("replay: unknown op $op")
+        }
     }
 
     private companion object {
