@@ -31,7 +31,7 @@ class PacketVectorsTest {
         }
         // A short read must fail loudly rather than report a green suite over
         // half the format.
-        assertEquals(169, rows.size, "expected 169 vectors, parsed ${rows.size}")
+        assertEquals(174, rows.size, "expected 174 vectors, parsed ${rows.size}")
 
         return rows.map { (name, verdict, hex) ->
             DynamicTest.dynamicTest("$verdict $name") { check(name, verdict, unhex(hex)) }
@@ -95,6 +95,7 @@ class PacketVectorsTest {
             is Packet.Message.CursorHidden -> Packet.encodeCursorHidden(m.seq)
             is Packet.Message.TypeText -> Packet.encodeTypeText(m.text)
             is Packet.Message.Key -> Packet.encodeKey(m.key)
+            is Packet.Message.TextFocused -> Packet.encodeTextFocused(m.focused)
             is Packet.Message.Mark -> Packet.encodeMark(m.kind, m.x, m.y)
             is Packet.Message.RelayedMark -> Packet.encodeRelayedMark(m.slot, m.kind, m.x, m.y)
             is Packet.Message.Reaction -> Packet.encodeReaction(m.kind)
@@ -266,6 +267,9 @@ class PacketVectorsTest {
         "key.right" -> Packet.encodeKey(Packet.Key.RIGHT)
         "key.up" -> Packet.encodeKey(Packet.Key.UP)
         "key.down" -> Packet.encodeKey(Packet.Key.DOWN)
+
+        "textFocused.true" -> Packet.encodeTextFocused(true)
+        "textFocused.false" -> Packet.encodeTextFocused(false)
 
         // The token is a UUID in RFC 4122 byte order — the same bytes its
         // string form spells — so both sides can key a trust store by the string.

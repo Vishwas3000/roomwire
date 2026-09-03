@@ -215,6 +215,12 @@ public enum Packet {
         case typeText(String)                                           // viewer -> host
         /// A key that does something rather than inserting something.
         case key(Key)                                                   // viewer -> host
+        /// Whether the thing with keyboard focus on the presenter's Mac takes
+        /// text. A viewer showing a picture of a screen cannot tell a search
+        /// field from a button, so the only side that can answer this is the
+        /// one running the applications. Sent on change, and once when control
+        /// is granted so a viewer never has to assume.
+        case textFocused(Bool)                                          // host -> viewer
         /// The first frame on the control lane, within five seconds of TLS
         /// coming up.
         ///
@@ -392,6 +398,10 @@ public enum Packet {
             let b = [UInt8](data)
             guard b.count == 2, let which = Key(rawValue: b[1]) else { return nil }
             return .key(which)
+        case 25:
+            let b = [UInt8](data)
+            guard b.count == 2, b[1] <= 1 else { return nil }
+            return .textFocused(b[1] == 1)
         case 21:
             let b = [UInt8](data)
             guard b.count == 17 else { return nil }
@@ -642,6 +652,10 @@ public enum Packet {
 
     public static func encodeKey(_ which: Key) -> Data {
         Data([24, which.rawValue])
+    }
+
+    public static func encodeTextFocused(_ focused: Bool) -> Data {
+        Data([25, focused ? 1 : 0])
     }
 
     public static let identifyMessage = Data([9])

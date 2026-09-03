@@ -325,6 +325,14 @@ object Packet {
         data class Key(val key: Packet.Key) : Message
 
         /**
+         * host -> viewer. Whether the thing with keyboard focus on the
+         * presenter's Mac takes text. A viewer showing a picture of a screen
+         * cannot tell a search field from a button, so the only side that can
+         * answer this is the one running the applications.
+         */
+        data class TextFocused(val focused: Boolean) : Message
+
+        /**
          * host -> viewer. Granted or taken away. Sent on every change,
          * including the automatic ones: leaving, being moved to another screen,
          * or the presenter simply touching their own mouse.
@@ -540,6 +548,12 @@ object Packet {
             24 -> {
                 if (b.size != 2) return null
                 return Message.Key(Key.of(b.u(1)) ?: return null)
+            }
+            25 -> {
+                if (b.size != 2) return null
+                val raw = b.u(1).toInt()
+                if (raw > 1) return null
+                return Message.TextFocused(raw == 1)
             }
             22 -> {
                 if (b.size != 17) return null
@@ -790,6 +804,9 @@ object Packet {
     }
 
     fun encodeKey(key: Key): ByteArray = byteArrayOf(24, key.raw.toByte())
+
+    fun encodeTextFocused(focused: Boolean): ByteArray =
+        byteArrayOf(25, if (focused) 1 else 0)
 
     /**
      * [text] in pieces that each fit one message, split between code points so

@@ -225,6 +225,9 @@ enum PacketVectors {
         for k in Packet.Key.allCases {
             encode("key.\(k)", Packet.encodeKey(k))
         }
+
+        encode("textFocused.true", Packet.encodeTextFocused(true))
+        encode("textFocused.false", Packet.encodeTextFocused(false))
     }
 
     // MARK: - Transport, ids 19 and 20
@@ -483,6 +486,9 @@ enum PacketVectors {
         reject("key.unknown", Data([24, 99]))
         reject("key.headerOnly", Data([24]))
         reject("key.long", Data([24, 0, 0]))
+        reject("textFocused.notABoolean", Data([25, 2]))
+        reject("textFocused.headerOnly", Data([25]))
+        reject("textFocused.long", Data([25, 0, 0]))
 
         reject("id.unallocated200", Data([200]))
         reject("id.empty", Data())
@@ -567,6 +573,7 @@ enum PacketVectors {
         case .systemGesture(let g): return Packet.encodeSystemGesture(g)
         case .typeText(let text): return Packet.encodeTypeText(text) ?? Data()
         case .key(let which): return Packet.encodeKey(which)
+        case .textFocused(let focused): return Packet.encodeTextFocused(focused)
         case .hello(let commitment, let port, let name):
             return Packet.encodeHello(commitment: commitment, udpPort: port, name: name)
         case .welcome(let port, let key, let fingerprint):
