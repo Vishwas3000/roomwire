@@ -1,10 +1,10 @@
-package com.roomlink.protocol
+package com.roomwire.protocol
 
 import kotlin.math.hypot
 import kotlin.math.min
 
 /**
- * A port of swift/Sources/RoomLinkProtocol/Pointer.swift. Behaviour is held to
+ * A port of swift/Sources/RoomWireProtocol/Pointer.swift. Behaviour is held to
  * the Swift side by protocol/transcripts.txt.
  *
  * The wire carries a **button mask**, not clicks. That is RFB's design and it

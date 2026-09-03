@@ -5,6 +5,6 @@ plugins {
 }
 
 allprojects {
-    group = "com.roomlink"
+    group = "com.roomwire"
     version = "0.1.0"
 }

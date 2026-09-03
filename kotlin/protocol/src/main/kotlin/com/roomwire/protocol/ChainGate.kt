@@ -1,7 +1,7 @@
-package com.roomlink.protocol
+package com.roomwire.protocol
 
 /**
- * A port of swift/Sources/RoomLinkProtocol/ChainGate.swift. Behaviour is held
+ * A port of swift/Sources/RoomWireProtocol/ChainGate.swift. Behaviour is held
  * to the Swift side by protocol/transcripts.txt.
  *
  * Decides whether an arriving frame can be decoded, or is built on one that

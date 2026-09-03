@@ -1,4 +1,4 @@
-package com.roomlink.protocol
+package com.roomwire.protocol
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull

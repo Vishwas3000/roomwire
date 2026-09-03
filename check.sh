@@ -4,4 +4,4 @@ set -e
 cd "$(dirname "$0")"
 ./swift/check.sh
 ( cd kotlin && ./gradlew --quiet :protocol:test --console=plain )
-echo "roomlink: both implementations agree with protocol/"
+echo "roomwire: both implementations agree with protocol/"

@@ -1,7 +1,7 @@
-package com.roomlink.protocol
+package com.roomwire.protocol
 
 /**
- * A port of swift/Sources/RoomLinkProtocol/Pacer.swift. Behaviour is held to
+ * A port of swift/Sources/RoomWireProtocol/Pacer.swift. Behaviour is held to
  * the Swift side by protocol/transcripts.txt.
  *
  * Decides when each arriving video frame should be shown.

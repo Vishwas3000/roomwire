@@ -1,9 +1,9 @@
-package com.roomlink.protocol
+package com.roomwire.protocol
 
 import kotlin.math.roundToInt
 
 /**
- * A port of swift/Sources/RoomLinkProtocol/Packet.swift. The bytes are the specification and
+ * A port of swift/Sources/RoomWireProtocol/Packet.swift. The bytes are the specification and
  * neither language owns them: protocol/vectors.txt is generated from Swift and
  * asserted here, so a difference between the two shows up as a failing test
  * rather than as a corrupt frame on somebody's phone months later.

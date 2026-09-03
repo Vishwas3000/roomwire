@@ -10,7 +10,7 @@
 set -e
 cd "$(dirname "$0")"
 out=$(mktemp -d)
-src=Sources/RoomLinkProtocol
+src=Sources/RoomWireProtocol
 
 # The wire format parses untrusted bytes off the network.
 swiftc $src/Packet.swift Checks/PacketCheck.swift -o "$out/packet"

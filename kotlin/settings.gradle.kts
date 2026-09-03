@@ -1,9 +1,9 @@
-// The Kotlin implementation of RoomLink.
+// The Kotlin implementation of RoomWire.
 //
 //   :protocol   pure Kotlin/JVM. No Android SDK, no emulator, no device. The
 //               wire format and the four decisions made about it — ChainGate,
 //               Pacer, CursorMotion, Pointer — each a twin of a Swift file in
-//               ../swift/Sources/RoomLinkProtocol. Held to the Swift side by
+//               ../swift/Sources/RoomWireProtocol. Held to the Swift side by
 //               protocol/vectors.txt (bytes) and protocol/transcripts.txt
 //               (behaviour), both generated from Swift and replayed here, so a
 //               difference between the two is a failing test and not a corrupt
@@ -16,6 +16,6 @@
 // That dependency arrow is the design. Everything that can be decided without
 // a network or a screen is decided in :protocol, where a laptop runs the tests
 // in a second.
-rootProject.name = "roomlink"
+rootProject.name = "roomwire"
 
 include(":protocol")

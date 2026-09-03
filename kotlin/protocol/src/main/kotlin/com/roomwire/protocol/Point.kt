@@ -1,4 +1,4 @@
-package com.roomlink.protocol
+package com.roomwire.protocol
 
 /**
  * A position, in whatever space the caller is working in.

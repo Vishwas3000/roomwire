@@ -1,4 +1,4 @@
-package com.roomlink.protocol
+package com.roomwire.protocol
 
 import kotlin.math.max
 import kotlin.math.min
@@ -13,7 +13,7 @@ fun isCursorSeqNewer(a: UShort, than: UShort): Boolean =
     a != than && ((a.toInt() - than.toInt()) and 0xFFFF) < 0x8000
 
 /**
- * A port of swift/Sources/RoomLinkProtocol/CursorMotion.swift. Behaviour is
+ * A port of swift/Sources/RoomWireProtocol/CursorMotion.swift. Behaviour is
  * held to the Swift side by protocol/transcripts.txt.
  *
  * Replays the pointer on the clock it was sampled on, a fixed hold late.

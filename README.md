@@ -1,4 +1,4 @@
-# RoomLink
+# RoomWire
 
 Local, peer-to-peer screen sharing between devices in the same room — the wire
 format and the decisions made about it, as one specification with two
@@ -10,7 +10,7 @@ behaviour transcripts, generated from one side and replayed by the other, so
 that a difference between the two is a failing test today and not a corrupt
 frame on somebody's phone in three months.
 
-RoomLink is extracted from [ExtendPilot](https://extendpilot.com), which is its
+RoomWire is extracted from [ExtendPilot](https://extendpilot.com), which is its
 first consumer. It is early. The wire format and the four state machines below
 are complete and cross-checked; the transport — discovery, pairing, and the
 control and media lanes — is next.
@@ -19,7 +19,7 @@ control and media lanes — is next.
 
 | | Swift | Kotlin | What it decides |
 |---|---|---|---|
-| `Packet` | `RoomLinkProtocol/Packet.swift` | `protocol/Packet.kt` | The wire format: one H.264 access unit plus eighteen small messages, ids 0–18, big-endian, every length bounds-checked. |
+| `Packet` | `RoomWireProtocol/Packet.swift` | `protocol/Packet.kt` | The wire format: one H.264 access unit plus eighteen small messages, ids 0–18, big-endian, every length bounds-checked. |
 | `ChainGate` | `ChainGate.swift` | `ChainGate.kt` | Whether an arriving frame can be decoded or is built on one that never came. Losing a frame and breaking the stream are not the same event. |
 | `Pacer` | `Pacer.swift` | `Pacer.kt` | When to show each frame: on the sender's clock, a fixed hold late, so jitter disappears and a stall reads as a freeze rather than a fast-forward. |
 | `CursorTrack` | `CursorMotion.swift` | `CursorMotion.kt` | Replaying a pointer sampled at 60 Hz and delivered unreliably, interpolating between positions the hand really visited. |
@@ -57,14 +57,14 @@ SDK.
 ## Using it
 
 Swift Package Manager: add `swift/` as a package dependency and import
-`RoomLinkProtocol`. Gradle: include `kotlin/` as a build and depend on
-`:protocol`, or wait for a published artifact under `com.roomlink`.
+`RoomWireProtocol`. Gradle: include `kotlin/` as a build and depend on
+`:protocol`, or wait for a published artifact under `com.roomwire`.
 
 ## Licence
 
 [PolyForm Shield 1.0.0](LICENSE). In plain terms: use it, change it, ship it,
 and sell what you build with it — for anything **except a product that competes
-with ExtendPilot, or with RoomLink itself**. That one carve-out is the whole
+with ExtendPilot, or with RoomWire itself**. That one carve-out is the whole
 licence. The text in `LICENSE` is short, readable, and controls over this
 paragraph; the definition of "competes" in it is deliberately broad, so if you
 are anywhere near the line, assume you are over it and ask.
