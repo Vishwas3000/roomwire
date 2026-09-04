@@ -105,13 +105,35 @@ public enum Chunker {
     }
 }
 
+/// The XOR of one frame's slices, each taken as exactly `ChunkHeader.body`
+/// bytes with the short last one padded with zeros. Any one lost slice is then
+/// this XOR'd with every slice that did arrive; if the lost one was the last,
+/// the parity header's `index` says how much of the result is real.
+///
+/// One datagram lost out of a frame's six was costing the whole frame — a
+/// datagram loss of half a percent read as frame loss of three — and the
+/// losses measured were isolated singles, which is exactly what one parity
+/// repairs. It relies on the slicer's invariant that every slice but the last
+/// is exactly `body` bytes; a short middle slice would rebuild wrong, and the
+/// AEAD makes that our own sender's problem only.
+public enum Parity {
+    public static func of(_ slices: [Data]) -> Data {
+        var out = [UInt8](repeating: 0, count: ChunkHeader.body)
+        for slice in slices {
+            for (k, byte) in slice.enumerated() { out[k] ^= byte }
+        }
+        return Data(out)
+    }
+}
+
 /// Puts slices back into frames. One per receiving connection, one thread.
 ///
 /// UDP reorders and loses; H.264 only decodes forward. So only a frame newer
-/// than the last one delivered ever comes back, a frame missing a slice is
-/// never delivered late, and a partial whose first slice is older than the
-/// deadline is scrap — the next refresh is a better use of the air than a frame
-/// the clock has already passed. Recovering the picture is the encoder's job.
+/// than the last one delivered ever comes back; a frame missing one slice is
+/// rebuilt from its parity if that arrived and is otherwise never delivered
+/// late; and a partial whose first slice is older than the deadline is scrap —
+/// the next refresh is a better use of the air than a frame the clock has
+/// already passed. Recovering the picture past that is the encoder's job.
 ///
 /// Frame ids wrap at 32 bits and are compared by signed distance, so a session
 /// that runs long enough to wrap notices nothing.
@@ -126,6 +148,8 @@ public struct Reassembler {
         let firstSeen: TimeInterval
         var slices: [Data?]
         var have = 0
+        /// The frame's parity and the length of its last slice, once seen.
+        var parity: (body: Data, last: Int)?
     }
 
     private var partials: [UInt32: Partial] = [:]
@@ -133,22 +157,56 @@ public struct Reassembler {
 
     public init() {}
 
-    /// One slice in, possibly one whole frame out.
+    /// One slice — or the frame's parity — in, possibly one whole frame out.
     public mutating func absorb(_ h: ChunkHeader.Fields, body: Data, now: TimeInterval) -> Data? {
         // `Fields` is public and anyone may build one, so every bound is
-        // checked here as well as in the decoder.
-        guard h.count >= 1, h.count <= ChunkHeader.maxChunks, h.index < h.count,
-              body.count <= ChunkHeader.body else { return nil }
+        // checked here as well as in the decoder — kind by kind, because what
+        // `index` means depends on it. Body length is part of the bound: a
+        // parity shorter than the body would put the rebuild past its end.
+        guard h.count >= 1, h.count <= ChunkHeader.maxChunks else { return nil }
+        switch h.kind {
+        case .video:
+            guard h.index < h.count, body.count <= ChunkHeader.body else { return nil }
+        case .parity:
+            guard h.index >= 1, Int(h.index) <= ChunkHeader.body, body.count == ChunkHeader.body else { return nil }
+        case .message, .ping:
+            return nil
+        }
         if let last = lastDelivered, !Self.newer(h.frameId, than: last) { return nil }
 
         partials = partials.filter { now - $0.value.firstSeen <= Self.deadline }
 
         var partial = partials[h.frameId]
             ?? Partial(count: Int(h.count), firstSeen: now, slices: Array(repeating: nil, count: Int(h.count)))
-        // A liar (same id, different count) or a duplicate changes nothing.
-        guard partial.count == Int(h.count), partial.slices[Int(h.index)] == nil else { return nil }
-        partial.slices[Int(h.index)] = body
-        partial.have += 1
+        // A liar (same id, different count) changes nothing — decided before
+        // anything indexes with either field.
+        guard partial.count == Int(h.count) else { return nil }
+        switch h.kind {
+        case .video:
+            // A duplicate changes nothing either.
+            guard partial.slices[Int(h.index)] == nil else { return nil }
+            partial.slices[Int(h.index)] = body
+            partial.have += 1
+        case .parity:
+            // `index` is a length here, never a slot: nothing indexes with it.
+            guard partial.parity == nil else { return nil }
+            partial.parity = (body, Int(h.index))
+        case .message, .ping:
+            return nil
+        }
+
+        // One slice short with the parity in hand is a whole frame.
+        if partial.have == partial.count - 1, let parity = partial.parity,
+           let missing = partial.slices.firstIndex(where: { $0 == nil }) {
+            var rebuilt = [UInt8](parity.body)
+            for case let slice? in partial.slices {
+                for (k, byte) in slice.enumerated() { rebuilt[k] ^= byte }
+            }
+            let length = missing == partial.count - 1 ? parity.last : ChunkHeader.body
+            partial.slices[missing] = Data(rebuilt.prefix(length))
+            partial.have += 1
+        }
+
         guard partial.have == partial.count else {
             partials[h.frameId] = partial
             // Room for eight. The one furthest behind goes first — it is the

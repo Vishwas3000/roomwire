@@ -2,6 +2,7 @@ package com.roomwire.transport
 
 import com.roomwire.protocol.ChunkHeader
 import com.roomwire.protocol.Chunker
+import com.roomwire.protocol.Parity
 import com.roomwire.protocol.MediaSeal
 import com.roomwire.protocol.Packet
 import kotlinx.coroutines.CoroutineScope
@@ -77,6 +78,34 @@ class MediaLaneTest {
         assertTrue(arrived.await(10, TimeUnit.SECONDS), "frames never arrived: got ${frames.size}")
         assertArrayEquals(frame, frames[0], "the in-order frame came back changed")
         assertArrayEquals(second, frames[1], "the reordered frame came back changed")
+
+        lane.close(); host.close(); scope.cancel()
+    }
+
+    @Test
+    fun `a frame with one slice withheld comes back whole once its parity lands`() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val lane = MediaLane(scope)
+        val host = Host(lane.port)
+        val sealer = MediaSeal.Sealer(key, MediaSeal.Role.HOST)
+
+        val frames = mutableListOf<ByteArray>()
+        val arrived = CountDownLatch(1)
+        lane.onPacket = { frames.add(it); arrived.countDown() }
+        lane.connect(InetAddress.getLoopbackAddress(), host.port, key)
+
+        // 147 slices, one of them lost on the air, and the parity last in the
+        // batch as the host sends it.
+        val frame = ByteArray(200_000).also { Random(11).nextBytes(it) }.also { it[0] = 1 }
+        val slices = Chunker.slice(frame)!!
+        for ((i, body) in slices.withIndex()) {
+            if (i == 40) continue
+            host.send(sealer.seal(ChunkHeader.Kind.VIDEO, body, 1u, i.toUShort(), slices.size.toUShort()))
+        }
+        host.send(sealer.seal(ChunkHeader.Kind.PARITY, Parity.of(slices), 1u, slices.last().size.toUShort(), slices.size.toUShort()))
+
+        assertTrue(arrived.await(10, TimeUnit.SECONDS), "the repaired frame never arrived")
+        assertArrayEquals(frame, frames[0], "the repaired frame came back changed")
 
         lane.close(); host.close(); scope.cancel()
     }

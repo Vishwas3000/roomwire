@@ -497,6 +497,24 @@ enum TranscriptVectors {
                  out.map { "delivered len=\($0.count) sum=\(digest($0))" } ?? "nil")
         }
 
+        /// The frame's parity, built from the same deterministic slices, so a
+        /// repaired frame reports the same sum as one that arrived whole. `len`
+        /// overrides the body length for hostile rows; `last` past the body is
+        /// clamped when building the slices and sent raw in the header.
+        func parity(_ id: UInt32, _ count: UInt16, last: Int, len: Int = ChunkHeader.body, now: TimeInterval) {
+            let now = q(now)
+            let slices = (0 ..< Int(count)).map { i -> Data in
+                let n = i == Int(count) - 1 ? min(last, ChunkHeader.body) : ChunkHeader.body
+                return Data((0 ..< n).map { UInt8(truncatingIfNeeded: Int(id) + i + $0) })
+            }
+            let body = Data(Parity.of(slices).prefix(len)) + Data(repeating: 0, count: max(0, len - ChunkHeader.body))
+            let out = r.absorb(.init(kind: .parity, counter: 0, frameId: id, index: UInt16(last), count: count),
+                               body: body, now: now)
+            emit("reassembler", scenario, "parity",
+                 "frame=\(id) count=\(count) last=\(last) len=\(len) now=\(f(now))",
+                 out.map { "delivered len=\($0.count) sum=\(digest($0))" } ?? "nil")
+        }
+
         // Three slices, then a one-slice frame.
         fresh("inOrder")
         absorb(1, 0, 3, len: 1367, now: 10)
@@ -572,6 +590,76 @@ enum TranscriptVectors {
         for id in 1 ... 9 { absorb(UInt32(id), 0, 2, len: 10, now: 10 + Double(id) / 1000) }
         absorb(1, 1, 2, len: 10, now: 10.01)
         absorb(9, 1, 2, len: 10, now: 10.011)
+
+        // One slice lost — any one — and the parity rebuilds it: the same
+        // bytes as inOrder's frame 1, which the sum is there to prove.
+        fresh("repairMiddle")
+        absorb(1, 0, 3, len: 1367, now: 10)
+        absorb(1, 2, 3, len: 100, now: 10.01)
+        parity(1, 3, last: 100, now: 10.02)
+
+        // The short last slice is the one that needs `last`: without it the
+        // rebuild would be 1367 bytes of data and zeros.
+        fresh("repairLast")
+        absorb(1, 0, 3, len: 1367, now: 10)
+        absorb(1, 1, 3, len: 1367, now: 10.01)
+        parity(1, 3, last: 100, now: 10.02)
+
+        // The parity may arrive first; UDP reorders it like anything else.
+        fresh("parityFirst")
+        parity(1, 3, last: 100, now: 10)
+        absorb(1, 0, 3, len: 1367, now: 10.01)
+        absorb(1, 2, 3, len: 100, now: 10.02)
+
+        // A one-slice frame's parity is that slice, padded: it delivers alone,
+        // with inOrder's frame-2 sum.
+        fresh("parityOnly")
+        parity(2, 1, last: 50, now: 10)
+
+        // Two lost is beyond one parity: nothing delivered, nothing crashes.
+        fresh("twoLost")
+        absorb(1, 0, 3, len: 1367, now: 10)
+        parity(1, 3, last: 100, now: 10.01)
+
+        // A parity for a frame already delivered is refused before anything is
+        // allocated: the no-loss path costs one refused absorb and no XOR.
+        fresh("parityAfterDelivery")
+        absorb(1, 0, 2, len: 1367, now: 10)
+        absorb(1, 1, 2, len: 10, now: 10.01)
+        parity(1, 2, last: 10, now: 10.02)
+
+        // The liar rule holds for parity: a count that disagrees is refused on
+        // the count, before anything is indexed. The honest one repairs.
+        fresh("parityLiar")
+        absorb(1, 0, 2, len: 1367, now: 10)
+        parity(1, 512, last: 10, now: 10.01)
+        parity(1, 2, last: 10, now: 10.02)
+
+        // A second parity changes nothing.
+        fresh("parityDuplicate")
+        parity(1, 2, last: 10, now: 10)
+        parity(1, 2, last: 10, now: 10.01)
+        absorb(1, 0, 2, len: 1367, now: 10.02)
+
+        // Any N of the N+1 datagrams within 100 ms of each other complete the
+        // frame: slice 0 is swept, the parity starts the partial over, and
+        // slice 1 completes it by rebuilding slice 0.
+        fresh("parityLate")
+        absorb(1, 0, 2, len: 1367, now: 10)
+        parity(1, 2, last: 10, now: 10.15)
+        absorb(1, 1, 2, len: 10, now: 10.16)
+
+        // The bounds a hostile parity is refused on — a zero or over-long last
+        // slice, a body that is not exactly the body — and the one that must be
+        // handled and not crash: last=1367 against a two-slice partial, where a
+        // port that indexed slices by it would read past the end. It repairs.
+        fresh("parityHostile")
+        absorb(1, 0, 2, len: 1367, now: 10)
+        parity(1, 2, last: 0, now: 10.01)
+        parity(1, 2, last: 1368, now: 10.02)
+        parity(1, 2, last: 10, len: 1366, now: 10.03)
+        parity(1, 2, last: 10, len: 1368, now: 10.04)
+        parity(1, 2, last: 1367, now: 10.05)
 
         // The header fields are public and anyone may build them; every bound
         // is checked here too, and an oversized body is refused whole.

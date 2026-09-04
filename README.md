@@ -24,7 +24,7 @@ the two lanes — runs end to end. The Kotlin transport is next.
 | `Pacer` | `Pacer.swift` | `Pacer.kt` | When to show each frame: on the sender's clock, a fixed hold late, so jitter disappears and a stall reads as a freeze rather than a fast-forward. |
 | `CursorTrack` | `CursorMotion.swift` | `CursorMotion.kt` | Replaying a pointer sampled at 60 Hz and delivered unreliably, interpolating between positions the hand really visited. |
 | `PointerState` / `TouchIntent` | `Pointer.swift` | `Pointer.kt` | Both sides of a button-mask contract: a finger read into a mask on the viewer, a mask read into click and drag edges on the host. |
-| `ChunkHeader` / `Chunker` / `Reassembler` | `Chunk.swift` | `Chunk.kt` | Cutting a frame into datagrams of at most 1400 bytes and putting it back together — in order, never late, never with a hole in it. |
+| `ChunkHeader` / `Chunker` / `Parity` / `Reassembler` | `Chunk.swift` | `Chunk.kt` | Cutting a frame into datagrams of at most 1400 bytes and putting it back together — in order, never late, and with one lost slice rebuilt from the frame's parity; more than one is not delivered. |
 | `MediaSeal` | `MediaSeal.swift` | `MediaSeal.kt` | The media lane's envelope: ChaCha20-Poly1305, the header as associated data, the lane derived from which end you are, and the replay window consulted only after the tag verifies. |
 | `Pairing` / `Framing` | `Pairing.swift` | `Pairing.kt` | The six characters both screens show, and the length prefix that makes a TCP byte stream into messages again. |
 | `Host` / `Viewer` | `RoomWireTransport/` | *next* | Discovery over Bonjour, pairing over mutual TLS, and the two lanes. Platform code: this is the half that owns sockets. |

@@ -264,6 +264,36 @@ reassembler	tooManyPartials	absorb	frame=8 index=0 count=2 len=10 now=10.008000	
 reassembler	tooManyPartials	absorb	frame=9 index=0 count=2 len=10 now=10.009000	nil
 reassembler	tooManyPartials	absorb	frame=1 index=1 count=2 len=10 now=10.010000	nil
 reassembler	tooManyPartials	absorb	frame=9 index=1 count=2 len=10 now=10.011000	delivered len=20 sum=25002
+reassembler	repairMiddle	absorb	frame=1 index=0 count=3 len=1367 now=10.000000	nil
+reassembler	repairMiddle	absorb	frame=1 index=2 count=3 len=100 now=10.010000	nil
+reassembler	repairMiddle	parity	frame=1 count=3 last=100 len=1367 now=10.020000	delivered len=2834 sum=17043
+reassembler	repairLast	absorb	frame=1 index=0 count=3 len=1367 now=10.000000	nil
+reassembler	repairLast	absorb	frame=1 index=1 count=3 len=1367 now=10.010000	nil
+reassembler	repairLast	parity	frame=1 count=3 last=100 len=1367 now=10.020000	delivered len=2834 sum=17043
+reassembler	parityFirst	parity	frame=1 count=3 last=100 len=1367 now=10.000000	nil
+reassembler	parityFirst	absorb	frame=1 index=0 count=3 len=1367 now=10.010000	nil
+reassembler	parityFirst	absorb	frame=1 index=2 count=3 len=100 now=10.020000	delivered len=2834 sum=17043
+reassembler	parityOnly	parity	frame=2 count=1 last=50 len=1367 now=10.000000	delivered len=50 sum=63065
+reassembler	twoLost	absorb	frame=1 index=0 count=3 len=1367 now=10.000000	nil
+reassembler	twoLost	parity	frame=1 count=3 last=100 len=1367 now=10.010000	nil
+reassembler	parityAfterDelivery	absorb	frame=1 index=0 count=2 len=1367 now=10.000000	nil
+reassembler	parityAfterDelivery	absorb	frame=1 index=1 count=2 len=10 now=10.010000	delivered len=1377 sum=27889
+reassembler	parityAfterDelivery	parity	frame=1 count=2 last=10 len=1367 now=10.020000	nil
+reassembler	parityLiar	absorb	frame=1 index=0 count=2 len=1367 now=10.000000	nil
+reassembler	parityLiar	parity	frame=1 count=512 last=10 len=1367 now=10.010000	nil
+reassembler	parityLiar	parity	frame=1 count=2 last=10 len=1367 now=10.020000	delivered len=1377 sum=27889
+reassembler	parityDuplicate	parity	frame=1 count=2 last=10 len=1367 now=10.000000	nil
+reassembler	parityDuplicate	parity	frame=1 count=2 last=10 len=1367 now=10.010000	nil
+reassembler	parityDuplicate	absorb	frame=1 index=0 count=2 len=1367 now=10.020000	delivered len=1377 sum=27889
+reassembler	parityLate	absorb	frame=1 index=0 count=2 len=1367 now=10.000000	nil
+reassembler	parityLate	parity	frame=1 count=2 last=10 len=1367 now=10.150000	nil
+reassembler	parityLate	absorb	frame=1 index=1 count=2 len=10 now=10.160000	delivered len=1377 sum=27889
+reassembler	parityHostile	absorb	frame=1 index=0 count=2 len=1367 now=10.000000	nil
+reassembler	parityHostile	parity	frame=1 count=2 last=0 len=1367 now=10.010000	nil
+reassembler	parityHostile	parity	frame=1 count=2 last=1368 len=1367 now=10.020000	nil
+reassembler	parityHostile	parity	frame=1 count=2 last=10 len=1366 now=10.030000	nil
+reassembler	parityHostile	parity	frame=1 count=2 last=10 len=1368 now=10.040000	nil
+reassembler	parityHostile	parity	frame=1 count=2 last=1367 len=1367 now=10.050000	delivered len=2734 sum=43041
 reassembler	hostile	absorb	frame=1 index=0 count=0 len=10 now=10.000000	nil
 reassembler	hostile	absorb	frame=1 index=2 count=2 len=10 now=10.000000	nil
 reassembler	hostile	absorb	frame=1 index=0 count=513 len=10 now=10.000000	nil

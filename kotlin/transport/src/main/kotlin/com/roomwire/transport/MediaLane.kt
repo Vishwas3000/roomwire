@@ -148,12 +148,10 @@ class MediaLane(private val scope: CoroutineScope) {
                 // Slices in, whole frames out, and only frames newer than the
                 // last delivered. A frame with a hole in it is never handed up
                 // late: recovering the picture is the encoder's job.
-                ChunkHeader.Kind.VIDEO ->
+                ChunkHeader.Kind.VIDEO, ChunkHeader.Kind.PARITY ->
                     reassembler.absorb(fields, body, System.nanoTime() / 1e9)?.let { onPacket?.invoke(it) }
                 ChunkHeader.Kind.MESSAGE -> if (body.isNotEmpty()) onPacket?.invoke(body)
                 ChunkHeader.Kind.PING -> Unit
-                // Dropped until the reassembler can repair; see the Swift twin.
-                ChunkHeader.Kind.PARITY -> Unit
             }
         }
     }

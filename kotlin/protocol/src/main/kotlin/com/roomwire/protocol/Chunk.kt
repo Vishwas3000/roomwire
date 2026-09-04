@@ -107,29 +107,76 @@ object Chunker {
  * delivered late, and a partial whose first slice is older than the deadline is
  * scrap. Frame ids wrap at 32 bits and compare by signed distance.
  */
+/**
+ * The XOR of one frame's slices, each taken as exactly [ChunkHeader.BODY] bytes
+ * with the short last one padded with zeros. Any one lost slice is this XOR'd
+ * with every slice that did arrive; if it was the last, the parity header's
+ * `index` says how much of the result is real. See the Swift twin for why.
+ */
+object Parity {
+    fun of(slices: List<ByteArray>): ByteArray {
+        val out = ByteArray(ChunkHeader.BODY)
+        for (s in slices) for (k in s.indices) out[k] = (out[k].toInt() xor s[k].toInt()).toByte()
+        return out
+    }
+}
+
 class Reassembler {
     private class Partial(val count: Int, val firstSeen: Double, val slices: Array<ByteArray?>) {
         var have = 0
+        /** The frame's parity and the length of its last slice, once seen. */
+        var parity: Pair<ByteArray, Int>? = null
     }
 
     private val partials = HashMap<UInt, Partial>()
     private var lastDelivered: UInt? = null
 
-    /** One slice in, possibly one whole frame out. */
+    /** One slice — or the frame's parity — in, possibly one whole frame out. */
     fun absorb(h: ChunkHeader.Fields, body: ByteArray, now: Double): ByteArray? {
-        // Fields is public and anyone may build one: every bound is checked here too.
-        if (h.count < 1u || h.count > ChunkHeader.MAX_CHUNKS || h.index >= h.count ||
-            body.size > ChunkHeader.BODY
-        ) return null
+        // Fields is public and anyone may build one: every bound is checked
+        // here too, kind by kind, because what `index` means depends on it. A
+        // parity's body must be exactly the body, or the rebuild reads past it.
+        if (h.count < 1u || h.count > ChunkHeader.MAX_CHUNKS) return null
+        val bounded = when (h.kind) {
+            ChunkHeader.Kind.VIDEO -> h.index < h.count && body.size <= ChunkHeader.BODY
+            ChunkHeader.Kind.PARITY -> h.index >= 1u && h.index.toInt() <= ChunkHeader.BODY && body.size == ChunkHeader.BODY
+            ChunkHeader.Kind.MESSAGE, ChunkHeader.Kind.PING -> false
+        }
+        if (!bounded) return null
         lastDelivered?.let { if (!newer(h.frameId, it)) return null }
 
         partials.values.removeIf { now - it.firstSeen > DEADLINE }
 
         val partial = partials[h.frameId] ?: Partial(h.count.toInt(), now, arrayOfNulls(h.count.toInt()))
-        // A liar (same id, different count) or a duplicate changes nothing.
-        if (partial.count != h.count.toInt() || partial.slices[h.index.toInt()] != null) return null
-        partial.slices[h.index.toInt()] = body
-        partial.have += 1
+        // A liar (same id, different count) changes nothing — decided before
+        // anything indexes with either field.
+        if (partial.count != h.count.toInt()) return null
+        when (h.kind) {
+            ChunkHeader.Kind.VIDEO -> {
+                // A duplicate changes nothing either.
+                if (partial.slices[h.index.toInt()] != null) return null
+                partial.slices[h.index.toInt()] = body
+                partial.have += 1
+            }
+            ChunkHeader.Kind.PARITY -> {
+                // `index` is a length here, never a slot: nothing indexes with it.
+                if (partial.parity != null) return null
+                partial.parity = body to h.index.toInt()
+            }
+            else -> return null
+        }
+
+        // One slice short with the parity in hand is a whole frame.
+        val parity = partial.parity
+        if (partial.have == partial.count - 1 && parity != null) {
+            val missing = partial.slices.indexOfFirst { it == null }
+            val rebuilt = parity.first.copyOf()
+            for (s in partial.slices) if (s != null) for (k in s.indices) rebuilt[k] = (rebuilt[k].toInt() xor s[k].toInt()).toByte()
+            val length = if (missing == partial.count - 1) parity.second else ChunkHeader.BODY
+            partial.slices[missing] = rebuilt.copyOf(length)
+            partial.have += 1
+        }
+
         if (partial.have != partial.count) {
             partials[h.frameId] = partial
             // Room for eight. The one furthest behind goes first.

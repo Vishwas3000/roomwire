@@ -270,10 +270,11 @@ final class InboundMedia {
             if let datagram, let (fields, body) = opener?.open(datagram) {
                 onLive?()
                 switch fields.kind {
-                case .video:
+                case .video, .parity:
                     // Slices in, whole frames out, and only frames newer than
-                    // the last one delivered. A frame with a hole in it is
-                    // never handed up late: recovering the picture is the
+                    // the last one delivered. One hole is filled from the
+                    // frame's parity if it came; more than one is never handed
+                    // up late — recovering the picture past that is the
                     // encoder's job, not this one's.
                     if let frame = reassembler.absorb(fields, body: body,
                                                       now: ProcessInfo.processInfo.systemUptime) {
@@ -282,12 +283,6 @@ final class InboundMedia {
                 case .message:
                     if !body.isEmpty { onPacket?(body) }
                 case .ping:
-                    break
-                case .parity:
-                    // Dropped, for now: a receiver that cannot repair behaves
-                    // exactly like one built before the kind existed. Handing
-                    // it to a reassembler that does not know parity would have
-                    // it stored as a slice at index L.
                     break
                 }
             }

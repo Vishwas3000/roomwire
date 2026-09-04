@@ -91,11 +91,38 @@ enum MediaLaneCheck {
         }
         assert(out == frame, "shuffled reassembly not identical")
 
-        // A missing slice means the frame is never delivered.
+        // A missing slice means the frame is never delivered…
         r = Reassembler()
         for i in slices.indices where i != 3 {
             assert(r.absorb(header(9, i, slices.count), body: slices[i], now: 100) == nil, "delivered with a hole in it")
         }
+
+        // …unless its parity arrived. Any one slice — the first, one in the
+        // middle, the short last one — and the frame comes back byte-identical.
+        let parity = Parity.of(slices)
+        func parityHeader(_ id: UInt32) -> ChunkHeader.Fields {
+            .init(kind: .parity, counter: 1, frameId: id, index: UInt16(slices.last!.count), count: UInt16(slices.count))
+        }
+        for drop in [0, 3, slices.count - 1] {
+            r = Reassembler()
+            for i in slices.indices where i != drop {
+                assert(r.absorb(header(9, i, slices.count), body: slices[i], now: 100) == nil,
+                       "delivered with slice \(drop) missing and no parity")
+            }
+            assert(r.absorb(parityHeader(9), body: parity, now: 100) == frame, "repair of slice \(drop) not identical")
+        }
+        // Two missing is past one parity: nothing, and no crash.
+        r = Reassembler()
+        for i in slices.indices where i != 3 && i != 4 { _ = r.absorb(header(9, i, slices.count), body: slices[i], now: 100) }
+        assert(r.absorb(parityHeader(9), body: parity, now: 100) == nil, "two holes repaired from one parity")
+        // A one-slice frame is its own parity, padded: it delivers alone.
+        r = Reassembler()
+        let one = Data(frame.prefix(700))
+        assert(r.absorb(.init(kind: .parity, counter: 1, frameId: 9, index: 700, count: 1),
+                        body: Parity.of([one]), now: 100) == one, "one-slice frame not rebuilt from its parity")
+        // A parity that is not exactly the body is refused, whatever it says.
+        r = Reassembler()
+        assert(r.absorb(parityHeader(9), body: parity.prefix(1366), now: 100) == nil, "short parity accepted")
 
         // A newer frame completing evicts an older partial for good.
         r = Reassembler()
@@ -154,9 +181,9 @@ enum MediaLaneCheck {
         assert(r.absorb(header(1, 0, 1), body: Data(repeating: 0, count: ChunkHeader.body + 1), now: 1) == nil,
                "oversized body accepted")
 
-        // Random fields and random bodies never crash it.
+        // Random fields and random bodies never crash it — slices and parities.
         for _ in 0 ..< 2000 {
-            let h = ChunkHeader.Fields(kind: .video, counter: 1,
+            let h = ChunkHeader.Fields(kind: Bool.random(using: &rng) ? .video : .parity, counter: 1,
                                        frameId: UInt32.random(in: 0 ... 20, using: &rng),
                                        index: UInt16(Int.random(in: 0 ... 600, using: &rng)),
                                        count: UInt16(Int.random(in: 0 ... 600, using: &rng)))

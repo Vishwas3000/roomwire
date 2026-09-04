@@ -38,7 +38,7 @@ class TranscriptsTest {
             Row(f[0], f[1], f[2], f[3], f[4], line)
         }
         // A short read must fail loudly rather than pass over half the machines.
-        assertEquals(327, rows.size, "expected 327 steps, parsed ${rows.size}")
+        assertEquals(357, rows.size, "expected 357 steps, parsed ${rows.size}")
         assertEquals(
             setOf(
                 "chaingate", "pacer", "cursor", "pointer", "touch",
@@ -174,6 +174,21 @@ class TranscriptsTest {
                 val index = a.u16("index")
                 val body = ByteArray(a.getValue("len").toInt()) { k -> (id.toLong() + index.toInt() + k).toByte() }
                 val h = ChunkHeader.Fields(ChunkHeader.Kind.VIDEO, 0uL, id, index, a.u16("count"))
+                r.absorb(h, body, a.d("now"))?.let { "delivered len=${it.size} sum=${digest(it)}" } ?: "nil"
+            }
+            "parity" -> {
+                // The same deterministic slices as `absorb`, XOR'd, so a repair
+                // reports the sum of the frame that never arrived whole.
+                val id = a.u32("frame")
+                val count = a.u16("count")
+                val last = a.getValue("last").toInt()
+                val len = a.getValue("len").toInt()
+                val slices = List(count.toInt()) { i ->
+                    val n = if (i == count.toInt() - 1) minOf(last, ChunkHeader.BODY) else ChunkHeader.BODY
+                    ByteArray(n) { k -> (id.toLong() + i + k).toByte() }
+                }
+                val body = Parity.of(slices).copyOf(len)   // truncates or zero-pads, as the Swift side does
+                val h = ChunkHeader.Fields(ChunkHeader.Kind.PARITY, 0uL, id, last.toUShort(), count)
                 r.absorb(h, body, a.d("now"))?.let { "delivered len=${it.size} sum=${digest(it)}" } ?: "nil"
             }
             else -> fail("reassembler: unknown op $op")
