@@ -11,6 +11,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.InetSocketAddress
+import java.net.StandardSocketOptions
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
 
@@ -32,8 +33,18 @@ class MediaLane(private val scope: CoroutineScope) {
     var onLive: (() -> Unit)? = null
 
     private val channel: DatagramChannel = DatagramChannel.open().apply {
+        // A megabyte, asked for before bind. Nothing set this before, so the
+        // socket had the platform default, and the access point this was first
+        // measured on hands over a 400 ms backlog — seventy datagrams, or a
+        // whole 200 KB keyframe — in about a millisecond. The kernel clamps
+        // the request to rmem_max and often doubles what it grants, so the
+        // number worth knowing is the one it gives back, in `receiveBuffer`.
+        setOption(StandardSocketOptions.SO_RCVBUF, 1 shl 20)
         bind(InetSocketAddress(0))
     }
+
+    /** What the kernel actually granted for SO_RCVBUF, in bytes. */
+    val receiveBuffer: Int get() = channel.getOption(StandardSocketOptions.SO_RCVBUF)
 
     /** What goes in the hello. */
     val port: Int get() = (channel.localAddress as InetSocketAddress).port

@@ -1,6 +1,7 @@
 package com.roomwire.protocol
 
 import java.security.GeneralSecurityException
+import java.security.InvalidKeyException
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -82,19 +83,53 @@ object MediaSeal {
      * The inbound half: bounds, then the tag, then — and only then — the replay
      * window. One per receiving connection, one thread.
      */
-    class Opener(private val key: ByteArray, role: Role, window: Int = 1024) {
+    class Opener(key: ByteArray, role: Role, window: Int = 1024) {
         private val lane = role.receivingLane
         private val seen = ReplayWindow(window)
+        private val spec = SecretKeySpec(key, "ChaCha20")
+        // One Cipher kept across datagrams, as BulkSeal.Opener does. The
+        // provider lookup in Cipher.getInstance was being paid on every
+        // datagram — at 180 a second on a phone whose access point delivers
+        // them seventy at a time, that lookup was the drain rate of the
+        // receive loop.
+        //
+        // `var`, because of one thing BulkSeal never meets: the JDK refuses to
+        // re-init a ChaCha20-Poly1305 Cipher under the key *and nonce* it last
+        // used, in either direction. BulkSeal's counter is its own and never
+        // repeats. This lane's counter is read off the datagram, so a forged
+        // or replayed one carrying counter N, followed by the genuine N, would
+        // have the genuine one refused — the transcripts' wrongLane scenario
+        // is exactly that sequence. On that path, and only that path, the
+        // instance is replaced.
+        private var cipher = cipher()
 
         /**
          * null for anything that does not open or has been seen before. The
-         * window is consulted last, so a forged counter costs an attacker
-         * nothing and buys them nothing.
+         * order is the contract the transcripts pin: bounds, then the header,
+         * then the tag, and the replay window last — so a forged counter costs
+         * an attacker nothing and buys them nothing.
          */
+        @Synchronized
         fun open(datagram: ByteArray): Pair<ChunkHeader.Fields, ByteArray>? {
-            val opened = open(datagram, key, lane) ?: return null
-            if (!seen.admit(opened.first.counter)) return null
-            return opened
+            if (datagram.size < ChunkHeader.SIZE + ChunkHeader.TAG || datagram.size > ChunkHeader.DATAGRAM_MAX) return null
+            val h = ChunkHeader.decode(datagram) ?: return null
+            val iv = IvParameterSpec(nonce(lane, h.counter))
+            val body = try {
+                try {
+                    cipher.init(Cipher.DECRYPT_MODE, spec, iv)
+                } catch (e: InvalidKeyException) {
+                    // The key is ours and always valid, so this can only be the
+                    // repeated-nonce refusal described above.
+                    cipher = cipher()
+                    cipher.init(Cipher.DECRYPT_MODE, spec, iv)
+                }
+                cipher.updateAAD(datagram, 0, ChunkHeader.SIZE)
+                cipher.doFinal(datagram, ChunkHeader.SIZE, datagram.size - ChunkHeader.SIZE)
+            } catch (e: GeneralSecurityException) {
+                return null
+            }
+            if (!seen.admit(h.counter)) return null
+            return h to body
         }
     }
     fun nonce(lane: UInt, counter: ULong): ByteArray {
@@ -132,9 +167,9 @@ object MediaSeal {
         }
     }
 
-    // ponytail: a fresh Cipher per datagram. The JDK refuses to re-init one
-    // for encryption under a key and nonce it has seen, so sharing means a
-    // pool keyed by direction; do that if profiling ever points here.
+    // The static seal/open below build a fresh Cipher per call. They serve the
+    // vectors and the tests, where one call is one call; the live receive path
+    // is Opener above, which keeps its own.
     /** The JDK names it one way, Android's Conscrypt the other. */
     private fun cipher(): Cipher = try {
         Cipher.getInstance("ChaCha20-Poly1305")

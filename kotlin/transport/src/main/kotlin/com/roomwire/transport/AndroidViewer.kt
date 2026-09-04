@@ -175,6 +175,9 @@ class AndroidViewer(
                     is Handshake.Step.Ready -> {
                         knownHosts.remember(host.name, live.peer.fingerprintHex)
                         media.connect(address, step.hostPort, step.mediaKey)
+                        // The number the kernel granted, not the one asked
+                        // for: a result that does not move is read against it.
+                        Log.i(LOG, "media lane up, SO_RCVBUF=${media.receiveBuffer}")
                         // Connected here, on welcome, rather than on the first
                         // datagram. Welcome *is* the host saying it admitted
                         // this viewer; waiting for video conflated "approved"
