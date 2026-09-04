@@ -336,6 +336,20 @@ object Packet {
         data class Key(val key: Packet.Key) : Message
 
         /**
+         * viewer -> host. How much room this viewer actually has, in its own
+         * points — dp on Android, points on iOS.
+         *
+         * Points rather than pixels, and that is the whole message. A phone's
+         * pixel count says nothing about how big anything looks on it, and a
+         * Mac screen built at a phone's pixel count arrives shrunk to a third.
+         * Points are what both ends already lay windows out in.
+         *
+         * The host uses it to build an extended desktop the same size as the
+         * glass it will be shown on, instead of guessing from a menu.
+         */
+        data class Screen(val width: UShort, val height: UShort) : Message
+
+        /**
          * Either way. A stamp to hand straight back, untouched.
          *
          * The one thing on this wire that measures the link rather than the
@@ -478,7 +492,7 @@ object Packet {
      * than fatal. Not a licence to ignore a malformed *known* message: those
      * still close the connection.
      */
-    const val HIGHEST_KNOWN_ID: Int = 28
+    const val HIGHEST_KNOWN_ID: Int = 29
 
     fun decodeMessage(b: ByteArray): Message? {
         when (b.firstOrNull()?.toUByte()?.toInt()) {
@@ -636,6 +650,15 @@ object Packet {
             28 -> {
                 if (b.size != 5) return null
                 return Message.Echo(b.be32(1))
+            }
+            29 -> {
+                if (b.size != 5) return null
+                val width = b.be16(1)
+                val height = b.be16(3)
+                // A screen with no extent is not one, and the host is about to
+                // build a desktop out of these two numbers.
+                if (width == 0u.toUShort() || height == 0u.toUShort()) return null
+                return Message.Screen(width, height)
             }
             22 -> {
                 if (b.size != 17) return null
@@ -892,6 +915,18 @@ object Packet {
     }
 
     fun encodeKey(key: Key): ByteArray = byteArrayOf(24, key.raw.toByte())
+
+    /**
+     * Points, not pixels — see [Message.Screen]. Zero in either direction is a
+     * programming error, not something to put on the wire and have refused.
+     */
+    fun encodeScreen(width: UShort, height: UShort): ByteArray {
+        require(width > 0u && height > 0u) { "a screen has an extent" }
+        val out = mutableListOf<Byte>(29)
+        out.appendBE16(width)
+        out.appendBE16(height)
+        return out.toByteArray()
+    }
 
     /**
      * Returned by the far end byte for byte. Whatever the sender put in it is

@@ -236,6 +236,18 @@ public enum Packet {
         /// a key exchange to send "hello" would be absurd. Anything larger
         /// than this, and every clipboard image, goes as a transfer instead.
         case clipboardText(String)                                      // either way
+        /// How much room this viewer actually has, in its own points.
+        ///
+        /// Points rather than pixels, and that is the whole message. A phone's
+        /// pixel count says nothing about how big anything looks on it — a
+        /// 1179-pixel-wide iPhone lays out 393 points, and a Mac screen built
+        /// at 1179 points would arrive shrunk to a third. Points are what both
+        /// ends already lay windows out in, so points are what compare.
+        ///
+        /// The host uses it to build an extended desktop the same size as the
+        /// glass it will be shown on, instead of guessing from a menu. Sent
+        /// once when a viewer joins, and again if the number changes.
+        case screen(width: UInt16, height: UInt16)                      // viewer -> host
         /// A stamp to hand straight back, untouched.
         ///
         /// The one thing on this wire that measures the link rather than the
@@ -327,7 +339,7 @@ public enum Packet {
     /// is deliberately *not* a licence to ignore a malformed known message:
     /// those still close the connection, because a peer that cannot encode
     /// what it claims to be sending is not one to keep guessing at.
-    public static let highestKnownId: UInt8 = 28
+    public static let highestKnownId: UInt8 = 29
 
     public static func decodeMessage(_ data: Data) -> Message? {
         switch data.first {
@@ -476,6 +488,14 @@ public enum Packet {
             let b = [UInt8](data)
             guard b.count == 5 else { return nil }
             return .echo(ms: be32(b, 1))
+        case 29:
+            let b = [UInt8](data)
+            guard b.count == 5 else { return nil }
+            let width = be16(b, 1), height = be16(b, 3)
+            // A screen with no extent is not one, and the host is about to
+            // build a desktop out of these two numbers.
+            guard width > 0, height > 0 else { return nil }
+            return .screen(width: width, height: height)
         case 21:
             let b = [UInt8](data)
             guard b.count == 17 else { return nil }
@@ -727,6 +747,16 @@ public enum Packet {
 
     public static func encodeKey(_ which: Key) -> Data {
         Data([24, which.rawValue])
+    }
+
+    /// Points, not pixels — see the `screen` case. Zero in either direction is
+    /// a programming error, not something to put on the wire and have refused.
+    public static func encodeScreen(width: UInt16, height: UInt16) -> Data {
+        precondition(width > 0 && height > 0, "a screen has an extent")
+        var out = Data([29])
+        out.appendBE16(width)
+        out.appendBE16(height)
+        return out
     }
 
     /// Returned by the far end byte for byte. Whatever the sender put in it is

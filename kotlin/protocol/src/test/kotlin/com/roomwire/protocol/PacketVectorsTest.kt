@@ -31,7 +31,7 @@ class PacketVectorsTest {
         }
         // A short read must fail loudly rather than report a green suite over
         // half the format.
-        assertEquals(223, rows.size, "expected 223 vectors, parsed ${rows.size}")
+        assertEquals(228, rows.size, "expected 228 vectors, parsed ${rows.size}")
 
         return rows.map { (name, verdict, hex) ->
             DynamicTest.dynamicTest("$verdict $name") { check(name, verdict, unhex(hex)) }
@@ -123,6 +123,7 @@ class PacketVectorsTest {
             is Packet.Message.Input -> Packet.encodeInput(m.buttons, m.x, m.y, m.sawMs)
             is Packet.Message.Scroll -> Packet.encodeScroll(m.dx, m.dy)
             is Packet.Message.Echo -> Packet.encodeEcho(m.ms)
+            is Packet.Message.Screen -> Packet.encodeScreen(m.width, m.height)
             Packet.Message.RequestControl -> Packet.requestControlMessage
             is Packet.Message.ControlGranted -> Packet.encodeControlGranted(m.granted)
             is Packet.Message.SystemGesture -> Packet.encodeSystemGesture(m.kind)
@@ -284,6 +285,9 @@ class PacketVectorsTest {
 
         "textFocused.true" -> Packet.encodeTextFocused(true)
         "textFocused.false" -> Packet.encodeTextFocused(false)
+
+        "screen.phone" -> Packet.encodeScreen(393u, 852u)
+        "screen.tablet" -> Packet.encodeScreen(1024u, 1366u)
 
         "echo" -> Packet.encodeEcho(0x1234_5678u)
         "echo.zero" -> Packet.encodeEcho(0u)

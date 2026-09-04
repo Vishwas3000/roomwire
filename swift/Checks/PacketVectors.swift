@@ -237,6 +237,11 @@ enum PacketVectors {
 
         // Handed back byte for byte, so the only vector worth freezing is that
         // the four bytes survive the trip out and are not reinterpreted.
+        // Points. The two most different phones in the room, so a build that
+        // starts treating these as pixels shows up as a diff here.
+        encode("screen.phone", Packet.encodeScreen(width: 393, height: 852))
+        encode("screen.tablet", Packet.encodeScreen(width: 1024, height: 1366))
+
         encode("echo", Packet.encodeEcho(ms: 0x1234_5678))
         encode("echo.zero", Packet.encodeEcho(ms: 0))
         encode("echo.wrapped", Packet.encodeEcho(ms: .max))
@@ -590,6 +595,11 @@ enum PacketVectors {
         reject("clipboardText.past8k",
                Data([27, 0x20, 0x01]) + Data(repeating: 0x78, count: 8193))
 
+        // A screen with no extent is not one; the host builds a desktop out
+        // of these and a zero would be a display nobody can see.
+        reject("screen.noWidth", Data([29, 0, 0, 3, 84]))
+        reject("screen.noHeight", Data([29, 1, 137, 0, 0]))
+        reject("screen.short", Data([29, 1, 137, 3]))
         reject("echo.short", Data([28, 0, 0, 0]))
         reject("echo.long", Data([28, 0, 0, 0, 0, 0]))
         reject("textFocused.notABoolean", Data([25, 2]))
@@ -694,6 +704,7 @@ enum PacketVectors {
         case .typeText(let text): return Packet.encodeTypeText(text) ?? Data()
         case .key(let which): return Packet.encodeKey(which)
         case .echo(let ms): return Packet.encodeEcho(ms: ms)
+        case .screen(let w, let h): return Packet.encodeScreen(width: w, height: h)
         case .textFocused(let focused): return Packet.encodeTextFocused(focused)
         case .bulkReady(let port, let key): return Packet.encodeBulkReady(port: port, key: key)
         case .clipboardText(let text): return Packet.encodeClipboardText(text) ?? Data()
