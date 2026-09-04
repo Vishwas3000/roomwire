@@ -4,6 +4,7 @@ import com.roomwire.protocol.Framing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.InetAddress
@@ -39,6 +40,33 @@ class ControlLane(
 
     private var socket: SSLSocket? = null
     private var reader: Job? = null
+
+    /**
+     * Everything waiting to go out, drained by exactly one writer.
+     *
+     * It used to be a coroutine per call on [Dispatchers.IO] — a multi-threaded
+     * dispatcher — all writing to one socket's output stream with nothing
+     * serialising them, and that is two bugs rather than one.
+     *
+     * Interleaving: two writes landing on two threads can split each other's
+     * length-prefixed frames, and the far end closes a connection it can no
+     * longer parse. Small messages survived on luck, each fitting inside one
+     * TLS record.
+     *
+     * Ordering, which is the one that actually bit: `hello` is sent from
+     * `onReady` and `reveal` from `onMessage`, enqueued in that order but then
+     * raced onto separate threads. A `reveal` that overtakes its `hello` is,
+     * from the host's side, a viewer talking out of turn — `Host.handle` reads
+     * it as a protocol violation and drops the session. That is an
+     * intermittent, unexplainable refusal to pair, and it is a race, so it
+     * comes and goes with load.
+     *
+     * Unlimited rather than bounded: dropping or suspending a control message
+     * to save memory would be trading a rare stall for a lost handshake, and
+     * this lane carries nothing bulky.
+     */
+    private val outbox = Channel<ByteArray>(Channel.UNLIMITED)
+    private var writer: Job? = null
     @Volatile private var closed = false
 
     /** The address the handshake actually reached, which is where the media lane goes. */
@@ -66,6 +94,18 @@ class ControlLane(
                     startHandshake()
                 }
                 socket = open
+                // Started before onReady, so the hello that fires from it is
+                // queued behind nothing and leaves first.
+                writer = scope.launch(Dispatchers.IO) {
+                    try {
+                        for (message in outbox) {
+                            open.outputStream.write(Framing.encode(message))
+                            open.outputStream.flush()
+                        }
+                    } catch (e: IOException) {
+                        close()
+                    }
+                }
                 val fingerprint = seen.peerFingerprint
                     ?: throw IOException("the host presented no certificate")
                 onReady?.invoke(fingerprint)
@@ -92,18 +132,16 @@ class ControlLane(
         }
     }
 
+    /**
+     * Any thread. Ordered: what is handed over first goes out first, because
+     * one writer drains [outbox] and nothing else touches the stream.
+     */
     fun send(message: ByteArray) {
         if (closed) return
-        scope.launch(Dispatchers.IO) {
-            try {
-                socket?.outputStream?.apply {
-                    write(Framing.encode(message))
-                    flush()
-                }
-            } catch (e: IOException) {
-                close()
-            }
-        }
+        // trySend, not send: this is called from callbacks that cannot suspend,
+        // and an unlimited channel refuses only once it is closed — which is
+        // exactly the case where there is nowhere to write anyway.
+        outbox.trySend(message)
     }
 
     fun close() {
@@ -111,6 +149,9 @@ class ControlLane(
         closed = true
         val doomed = socket
         socket = null
+        outbox.close()
+        writer?.cancel()
+        writer = null
         // Closing an SSLSocket writes a close_notify alert, so it is network
         // I/O and cannot run on the caller's thread: leave() arrives straight
         // from a tap on Leave or Cancel, which is the main thread, and
