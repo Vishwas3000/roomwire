@@ -1,5 +1,8 @@
 package com.roomwire.protocol
 
+import kotlin.math.max
+import kotlin.math.min
+
 /**
  * A port of swift/Sources/RoomWireProtocol/Pacer.swift. Behaviour is held to
  * the Swift side by protocol/transcripts.txt.
@@ -26,8 +29,39 @@ class Pacer {
         data object DecodeOnly : Verdict
     }
 
-    /** The hold between a frame's mapped send time and its presentation — the jitter buffer. */
-    private val hold = 0.12
+    /**
+     * The hold between a frame's mapped send time and its presentation — the
+     * jitter buffer — sized by what the link is actually doing.
+     *
+     * It was a flat 0.12 for every link, which is two wrong answers rather
+     * than one: a quiet network pays 120 ms it never needed, and a radio with
+     * a stall every half second gets a buffer too small to cover it and
+     * stutters anyway. The pointer has run an adaptive one since it shipped
+     * (CursorMotion); this is that mechanism on the number the picture is
+     * scheduled against.
+     *
+     * The input is free: `lateness` is already measured against an anchor
+     * that rebases whenever a frame beats it, so it is excess over the best
+     * transit seen.
+     */
+    private val hold: Double get() = min(max(spread * 1.2, minHold), maxHold)
+
+    /**
+     * The delay above the best transit the hold is currently sized for. Rises
+     * to meet any lateness on the frame that shows it; falls slowly after, so
+     * one bad second does not cost the next thirty.
+     */
+    private var spread = 0.0
+    /** Per admitted frame, so about 24 ms of give back per second at 30 fps. */
+    private val ease = 0.0008
+    /** Cheap enough to pay on a good link, and about three frames at 60 fps. */
+    private val minHold = 0.05
+    /**
+     * The most delay worth paying to stay smooth. Above the old fixed value on
+     * purpose: a link that genuinely needs 150 ms should be allowed to have it
+     * rather than stutter at 120.
+     */
+    private val maxHold = 0.20
     /** While a backlog drains, still surface a frame this often. */
     private val starvedAfter = 0.3
     /** Lateness that holds this long is the link's new floor, not a burst still draining. */
@@ -48,9 +82,24 @@ class Pacer {
         val a = anchor ?: return Pair(rebase(remote, now), 0.0)
         val lateness = now - (a.second + (remote - a.first))
 
-        // Travelled faster than the anchor frame did (or the clock broke):
-        // adopt this frame as the new baseline for "on schedule".
-        if (lateness < 0 || lateness > brokenAfter) return Pair(rebase(remote, now), lateness)
+        // A clock artefact — sleep, or the stamp wrapping — says nothing about
+        // the link, so the envelope starts again with it.
+        if (lateness > brokenAfter) {
+            spread = 0.0
+            return Pair(rebase(remote, now), lateness)
+        }
+        // Travelled faster than the anchor frame did: adopt this frame as the
+        // new baseline. The envelope survives, because a link that just proved
+        // it can be quick is still the link that was slow a moment ago.
+        if (lateness < 0) return Pair(rebase(remote, now), lateness)
+
+        // Before the hold is read, so a frame that is late widens the buffer
+        // deciding its own fate. Deliberate: the first late frame of a burst
+        // is then presented rather than being the one that stutters.
+        // Clamped to the ceiling on the way in, not just on the way out. A
+        // 300 ms stall is not 300 ms of jitter — it is the link stopping and
+        // then dumping, which the backlog path below already handles.
+        spread = max(min(lateness, maxHold), spread - ease)
 
         if (lateness <= hold) {
             lateSince = null

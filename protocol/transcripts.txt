@@ -44,17 +44,17 @@ chaingate	beforeAnyChain	admit	seq=3 base=3 droppable=0 restores=1	decode broken
 chaingate	beforeAnyChain	admit	seq=4 base=4 droppable=0 restores=0	decode broken=0 missing=0 missingBase=0
 chaingate	beforeAnyChain	reset	-	broken=1 missing=0 missingBase=0
 chaingate	beforeAnyChain	admit	seq=5 base=5 droppable=0 restores=0	broken broken=1 missing=0 missingBase=0
-pacer	onSchedule	admit	remote=0.000000 now=1.000000	present:0.120000 late=0.000000
-pacer	onSchedule	admit	remote=0.033333 now=1.033333	present:0.120000 late=0.000000
-pacer	onSchedule	admit	remote=0.066667 now=1.066667	present:0.120000 late=0.000000
-pacer	onSchedule	admit	remote=0.100000 now=1.100000	present:0.120000 late=0.000000
-pacer	onSchedule	admit	remote=0.133333 now=1.133333	present:0.120000 late=0.000000
-pacer	jitter	admit	remote=0.000000 now=1.000000	present:0.120000 late=0.000000
-pacer	jitter	admit	remote=0.033000 now=1.083000	present:0.070000 late=0.050000
-pacer	jitter	admit	remote=0.066000 now=1.086000	present:0.100000 late=0.020000
-pacer	jitter	admit	remote=0.100000 now=1.210000	present:0.010000 late=0.110000
-pacer	jitter	admit	remote=0.133000 now=1.133000	present:0.120000 late=0.000000
-pacer	burst	admit	remote=0.000000 now=1.000000	present:0.120000 late=0.000000
+pacer	onSchedule	admit	remote=0.000000 now=1.000000	present:0.050000 late=0.000000
+pacer	onSchedule	admit	remote=0.033333 now=1.033333	present:0.050000 late=0.000000
+pacer	onSchedule	admit	remote=0.066667 now=1.066667	present:0.050000 late=0.000000
+pacer	onSchedule	admit	remote=0.100000 now=1.100000	present:0.050000 late=0.000000
+pacer	onSchedule	admit	remote=0.133333 now=1.133333	present:0.050000 late=0.000000
+pacer	jitter	admit	remote=0.000000 now=1.000000	present:0.050000 late=0.000000
+pacer	jitter	admit	remote=0.033000 now=1.083000	present:0.010000 late=0.050000
+pacer	jitter	admit	remote=0.066000 now=1.086000	present:0.039040 late=0.020000
+pacer	jitter	admit	remote=0.100000 now=1.210000	present:0.022000 late=0.110000
+pacer	jitter	admit	remote=0.133000 now=1.133000	present:0.131040 late=0.000000
+pacer	burst	admit	remote=0.000000 now=1.000000	present:0.050000 late=0.000000
 pacer	burst	admit	remote=0.033333 now=2.000000	showNow late=0.966667
 pacer	burst	admit	remote=0.066667 now=2.000000	decodeOnly late=0.933333
 pacer	burst	admit	remote=0.100000 now=2.000000	decodeOnly late=0.900000
@@ -71,19 +71,19 @@ pacer	burst	admit	remote=0.433333 now=2.000000	decodeOnly late=0.566667
 pacer	burst	admit	remote=0.500000 now=2.300000	decodeOnly late=0.800000
 pacer	burst	admit	remote=0.533000 now=2.300000	decodeOnly late=0.767000
 pacer	burst	admit	remote=0.566000 now=2.610000	showNow late=1.044000
-pacer	floor	admit	remote=0.000000 now=1.000000	present:0.120000 late=0.000000
+pacer	floor	admit	remote=0.000000 now=1.000000	present:0.050000 late=0.000000
 pacer	floor	admit	remote=0.100000 now=1.500000	showNow late=0.400000
 pacer	floor	admit	remote=0.200000 now=2.000000	showNow late=0.800000
 pacer	floor	admit	remote=0.300000 now=2.500000	showNow late=1.200000
 pacer	floor	admit	remote=0.400000 now=3.000000	showNow late=1.600000
-pacer	floor	admit	remote=0.500000 now=3.500000	present:0.120000 late=2.000000
-pacer	floor	admit	remote=0.533000 now=3.533000	present:0.120000 late=0.000000
-pacer	fasterThanAnchor	admit	remote=0.000000 now=1.000000	present:0.120000 late=0.000000
-pacer	fasterThanAnchor	admit	remote=0.100000 now=1.050000	present:0.120000 late=-0.050000
-pacer	fasterThanAnchor	admit	remote=0.200000 now=1.150000	present:0.120000 late=0.000000
-pacer	clockBroke	admit	remote=0.000000 now=1.000000	present:0.120000 late=0.000000
-pacer	clockBroke	admit	remote=0.100000 now=40.000000	present:0.120000 late=38.900000
-pacer	clockBroke	admit	remote=0.200000 now=40.100000	present:0.120000 late=0.000000
+pacer	floor	admit	remote=0.500000 now=3.500000	present:0.200000 late=2.000000
+pacer	floor	admit	remote=0.533000 now=3.533000	present:0.200000 late=0.000000
+pacer	fasterThanAnchor	admit	remote=0.000000 now=1.000000	present:0.050000 late=0.000000
+pacer	fasterThanAnchor	admit	remote=0.100000 now=1.050000	present:0.050000 late=-0.050000
+pacer	fasterThanAnchor	admit	remote=0.200000 now=1.150000	present:0.050000 late=0.000000
+pacer	clockBroke	admit	remote=0.000000 now=1.000000	present:0.050000 late=0.000000
+pacer	clockBroke	admit	remote=0.100000 now=40.000000	present:0.050000 late=38.900000
+pacer	clockBroke	admit	remote=0.200000 now=40.100000	present:0.050000 late=0.000000
 cursor	firstArrival	position	now=5.000000	nil
 cursor	firstArrival	isEmpty	-	true
 cursor	firstArrival	arrived	sentMs=1000 x=0.100000 y=0.200000 now=5.000000	-
