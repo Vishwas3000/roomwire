@@ -297,6 +297,6 @@ class AndroidViewer(
     private companion object {
         const val LOG = "roomwire"
         const val SERVICE_TYPE = "_roomwire._tcp."
-        const val PROTOCOL_VERSION = 1
+        const val PROTOCOL_VERSION = 2
     }
 }

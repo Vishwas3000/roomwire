@@ -80,7 +80,18 @@ internal class Handshake(
                 listOf(Step.Ready(decoded.mediaKey, decoded.udpPort.toInt()))
             }
 
-            null -> over("the host sent something we could not read")
+            // A newer host sending something this build has no case for, once
+            // the session is up: skipped, not fatal. Byte 0 rather than the
+            // null, because a malformed *known* message looks identical here
+            // and must still end the session.
+            null ->
+                if (welcomed && message.isNotEmpty() &&
+                    (message[0].toInt() and 0xFF) > Packet.HIGHEST_KNOWN_ID
+                ) {
+                    emptyList()
+                } else {
+                    over("the host sent something we could not read")
+                }
 
             else -> emptyList()   // anything else before the session is up is not ours to act on
         }

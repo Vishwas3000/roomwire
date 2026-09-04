@@ -213,6 +213,13 @@ public final class Viewer: @unchecked Sendable {
             onPacket?(message)
 
         case .none:
+            // A newer host sending something this build has no case for, once
+            // the session is up: skipped, not fatal. Byte 0 rather than the
+            // nil above, because a malformed known message looks identical
+            // there and must still end the session.
+            if case .connected = state, let id = message.first, id > Packet.highestKnownId {
+                return
+            }
             fail("the host sent something we could not read")
         }
     }

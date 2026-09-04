@@ -68,7 +68,15 @@ public struct DiscoveredHost: Hashable, Sendable {
 }
 
 /// What the two lanes are advertised and found as.
-enum Bonjour {
+public enum Bonjour {
     static let type = "_roomwire._tcp"
-    static let version = 1
+    /// 2 since ids 26 and 27. Both ends already refuse to *list* a host whose
+    /// TXT version differs, so skew is handled by not connecting at all —
+    /// which is the mechanism this codebase chose, and it suits a protocol
+    /// whose two halves ship together.
+    ///
+    /// This should be the last bump for an added message. From this version
+    /// on, an id past `Packet.highestKnownId` is skipped by a live session
+    /// rather than ending it, so anything additive costs nothing.
+    public static let version = 2
 }

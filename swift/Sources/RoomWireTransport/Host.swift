@@ -261,6 +261,18 @@ public final class Host: @unchecked Sendable {
             onPacket?(session.peer, message)
 
         default:
+            // A newer peer sending something this build has no case for, once
+            // the session is up: skipped, not fatal. Additive ids are then
+            // free forever, and only the version that introduces the tolerance
+            // itself needs a Bonjour bump.
+            //
+            // A *malformed known* message is still fatal, which is why this
+            // reads byte 0 rather than trusting the nil from decodeMessage:
+            // the two are indistinguishable there, and a peer that cannot
+            // encode what it claims to be sending is not one to guess at.
+            if session.state == .live, let id = message.first, id > Packet.highestKnownId {
+                return
+            }
             // Out of order, unknown, or before the session was live. A control
             // lane that is not following the sequence is not one to guess at.
             drop(session)

@@ -31,7 +31,7 @@ class PacketVectorsTest {
         }
         // A short read must fail loudly rather than report a green suite over
         // half the format.
-        assertEquals(204, rows.size, "expected 204 vectors, parsed ${rows.size}")
+        assertEquals(216, rows.size, "expected 216 vectors, parsed ${rows.size}")
 
         return rows.map { (name, verdict, hex) ->
             DynamicTest.dynamicTest("$verdict $name") { check(name, verdict, unhex(hex)) }
@@ -106,6 +106,8 @@ class PacketVectorsTest {
             is Packet.Message.TypeText -> Packet.encodeTypeText(m.text)
             is Packet.Message.Key -> Packet.encodeKey(m.key)
             is Packet.Message.TextFocused -> Packet.encodeTextFocused(m.focused)
+            is Packet.Message.BulkReady -> Packet.encodeBulkReady(m.port, m.key)
+            is Packet.Message.ClipboardText -> Packet.encodeClipboardText(m.text)
             is Packet.Message.Mark -> Packet.encodeMark(m.kind, m.x, m.y)
             is Packet.Message.RelayedMark -> Packet.encodeRelayedMark(m.slot, m.kind, m.x, m.y)
             is Packet.Message.Reaction -> Packet.encodeReaction(m.kind)
@@ -280,6 +282,11 @@ class PacketVectorsTest {
 
         "textFocused.true" -> Packet.encodeTextFocused(true)
         "textFocused.false" -> Packet.encodeTextFocused(false)
+
+        "bulkReady" -> Packet.encodeBulkReady(0xC001u, mediaKey)
+        "clipboardText" -> Packet.encodeClipboardText("copied")
+        "clipboardText.utf8" -> Packet.encodeClipboardText("h\u00e9llo \uD83D\uDC4D")
+        "clipboardText.long" -> Packet.encodeClipboardText("x".repeat(8192))
 
         // The transfer codec. The two length fields in an offer are the only
         // thing separating a multi-byte name from an empty mime type, so those

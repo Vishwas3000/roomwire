@@ -229,6 +229,14 @@ enum PacketVectors {
         encode("textFocused.true", Packet.encodeTextFocused(true))
         encode("textFocused.false", Packet.encodeTextFocused(false))
 
+        encode("bulkReady", Packet.encodeBulkReady(port: 0xC001, key: mediaKey))
+        encode("clipboardText", Packet.encodeClipboardText("copied")!)
+        encode("clipboardText.utf8", Packet.encodeClipboardText("héllo 👍")!)
+        // The length is two bytes here rather than typeText's one, and this is
+        // the vector that says so.
+        encode("clipboardText.long",
+               Packet.encodeClipboardText(String(repeating: "x", count: 8192))!)
+
         // The transfer codec, unsealed. Pure bytes, so these pin the format
         // itself rather than the envelope around it.
         let head = Data((0 ..< 32).map { UInt8(0xA0 &+ $0) })
@@ -560,6 +568,16 @@ enum PacketVectors {
                Bulk.Sealer(key: sealKey, lane: .viewerToHost).seal(Transfer.encode(.bye)))
         reject("bulk.short", good.prefix(4 + Bulk.minBody - 1))
 
+        reject("bulkReady.portZero", Data([26, 0, 0]) + mediaKey)
+        reject("bulkReady.short", Data([26, 0xC0, 0x01]) + mediaKey.prefix(31))
+        reject("bulkReady.long", Data([26, 0xC0, 0x01]) + mediaKey + Data([0]))
+        reject("clipboardText.empty", Data([27, 0, 0]))
+        reject("clipboardText.lengthShort", Data([27, 0, 9]) + Data("hi".utf8))
+        reject("clipboardText.lengthLong", Data([27, 0, 2]) + Data("hello".utf8))
+        reject("clipboardText.notUtf8", Data([27, 0, 1, 0x80]))
+        reject("clipboardText.past8k",
+               Data([27, 0x20, 0x01]) + Data(repeating: 0x78, count: 8193))
+
         reject("textFocused.notABoolean", Data([25, 2]))
         reject("textFocused.headerOnly", Data([25]))
         reject("textFocused.long", Data([25, 0, 0]))
@@ -661,6 +679,8 @@ enum PacketVectors {
         case .typeText(let text): return Packet.encodeTypeText(text) ?? Data()
         case .key(let which): return Packet.encodeKey(which)
         case .textFocused(let focused): return Packet.encodeTextFocused(focused)
+        case .bulkReady(let port, let key): return Packet.encodeBulkReady(port: port, key: key)
+        case .clipboardText(let text): return Packet.encodeClipboardText(text) ?? Data()
         case .hello(let commitment, let port, let name):
             return Packet.encodeHello(commitment: commitment, udpPort: port, name: name)
         case .welcome(let port, let key, let fingerprint):

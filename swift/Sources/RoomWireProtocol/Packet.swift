@@ -215,6 +215,19 @@ public enum Packet {
         case typeText(String)                                           // viewer -> host
         /// A key that does something rather than inserting something.
         case key(Key)                                                   // viewer -> host
+        /// Where to reach this host's bulk lane, and the key to speak to it
+        /// with. Sent once the control lane is authenticated, which is what
+        /// makes a plain symmetric key safe to hand over here: the lane it
+        /// keys carries no certificates precisely so an iOS viewer can join
+        /// one without a certificate library.
+        case bulkReady(port: UInt16, key: Data)                         // host -> viewer
+        /// Copied text, for pasting at the other end.
+        ///
+        /// On this lane rather than the bulk one because a paste has to be
+        /// instant, and the bulk lane is dialled lazily — a TCP connection and
+        /// a key exchange to send "hello" would be absurd. Anything larger
+        /// than this, and every clipboard image, goes as a transfer instead.
+        case clipboardText(String)                                      // either way
         /// Whether the thing with keyboard focus on the presenter's Mac takes
         /// text. A viewer showing a picture of a screen cannot tell a search
         /// field from a button, so the only side that can answer this is the
@@ -280,6 +293,19 @@ public enum Packet {
     /// Typing is not bulk transfer; a burst longer than this is several
     /// messages, split by the sender where a character ends.
     public static let maxTextBytes = 255
+    /// Big enough for anything anyone pastes as text, small enough that one
+    /// of them stalls the control lane's other traffic for about two
+    /// milliseconds rather than two seconds.
+    public static let maxClipboardBytes = 8192
+
+    /// The largest id this build understands.
+    ///
+    /// A peer speaking a later version may send something newer, and at the
+    /// live stage that is skipped rather than fatal — see the transports. It
+    /// is deliberately *not* a licence to ignore a malformed known message:
+    /// those still close the connection, because a peer that cannot encode
+    /// what it claims to be sending is not one to keep guessing at.
+    public static let highestKnownId: UInt8 = 27
 
     public static func decodeMessage(_ data: Data) -> Message? {
         switch data.first {
@@ -402,6 +428,19 @@ public enum Packet {
             let b = [UInt8](data)
             guard b.count == 2, b[1] <= 1 else { return nil }
             return .textFocused(b[1] == 1)
+        case 26:
+            let b = [UInt8](data)
+            guard b.count == 35 else { return nil }
+            let port = be16(b, 1)
+            guard port != 0 else { return nil }
+            return .bulkReady(port: port, key: Data(b[3 ..< 35]))
+        case 27:
+            let b = [UInt8](data)
+            guard b.count >= 4 else { return nil }
+            let length = Int(be16(b, 1))
+            guard (1 ... maxClipboardBytes).contains(length), b.count == 3 + length,
+                  let text = String(validating: b[3...], as: UTF8.self) else { return nil }
+            return .clipboardText(text)
         case 21:
             let b = [UInt8](data)
             guard b.count == 17 else { return nil }
@@ -656,6 +695,25 @@ public enum Packet {
 
     public static func encodeTextFocused(_ focused: Bool) -> Data {
         Data([25, focused ? 1 : 0])
+    }
+
+    /// `key` is 32 bytes by construction; anything else is a programming error.
+    public static func encodeBulkReady(port: UInt16, key: Data) -> Data {
+        precondition(key.count == 32, "a bulk key is 32 bytes")
+        precondition(port != 0, "a bulk port has to dial somewhere")
+        var out = Data([26])
+        out.appendBE16(port)
+        return out + key
+    }
+
+    /// nil for text that is empty or will not fit, so a caller cannot put a
+    /// frame on the wire the far end is obliged to refuse.
+    public static func encodeClipboardText(_ text: String) -> Data? {
+        let bytes = Array(text.utf8)
+        guard (1 ... maxClipboardBytes).contains(bytes.count) else { return nil }
+        var out = Data([27])
+        out.appendBE16(UInt16(bytes.count))
+        return out + bytes
     }
 
     public static let identifyMessage = Data([9])

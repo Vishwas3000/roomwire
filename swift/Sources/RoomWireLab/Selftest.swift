@@ -68,7 +68,11 @@ enum Selftest {
         }
         try expect(found, "A never saw the host")
         let discovered = a.viewer.hosts.first { $0.name == "selftest-host" }!
-        try expect(discovered.version == 1, "the TXT record did not say version 1")
+        // Against the constant, not a literal: the point of this line is that
+        // what was advertised is what this build speaks, and a hardcoded 1
+        // only tested that nobody had bumped it.
+        try expect(discovered.version == Bonjour.version,
+                   "the TXT record said version \(discovered.version), not \(Bonjour.version)")
 
         let tokenA = UUID()
         a.viewer.join(discovered, token: tokenA, name: "Viewer A")

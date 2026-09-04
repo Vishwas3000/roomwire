@@ -333,6 +333,27 @@ object Packet {
         data class TextFocused(val focused: Boolean) : Message
 
         /**
+         * host -> viewer. Where to reach this host's bulk lane, and the key to
+         * speak to it with. Sent once the control lane is authenticated, which
+         * is what makes a plain symmetric key safe to hand over: the lane it
+         * keys carries no certificates precisely so an iOS viewer can join one
+         * without a certificate library.
+         */
+        data class BulkReady(val port: UShort, val key: ByteArray) : Message {
+            override fun equals(other: Any?): Boolean =
+                other is BulkReady && port == other.port && key.contentEquals(other.key)
+
+            override fun hashCode(): Int = 31 * port.hashCode() + key.contentHashCode()
+        }
+
+        /**
+         * Either way. Copied text, for pasting at the other end. On this lane
+         * rather than the bulk one because a paste has to be instant, and the
+         * bulk lane is dialled lazily.
+         */
+        data class ClipboardText(val text: String) : Message
+
+        /**
          * host -> viewer. Granted or taken away. Sent on every change,
          * including the automatic ones: leaving, being moved to another screen,
          * or the presenter simply touching their own mouse.
@@ -418,6 +439,21 @@ object Packet {
      * the sender where a character ends.
      */
     const val MAX_TEXT_BYTES = 255
+
+    /**
+     * Big enough for anything anyone pastes as text, small enough that one of
+     * them stalls the control lane's other traffic for about two milliseconds
+     * rather than two seconds.
+     */
+    const val MAX_CLIPBOARD_BYTES = 8192
+
+    /**
+     * The largest id this build understands. A peer speaking a later version
+     * may send something newer, and at the live stage that is skipped rather
+     * than fatal. Not a licence to ignore a malformed *known* message: those
+     * still close the connection.
+     */
+    const val HIGHEST_KNOWN_ID: Int = 27
 
     fun decodeMessage(b: ByteArray): Message? {
         when (b.firstOrNull()?.toUByte()?.toInt()) {
@@ -554,6 +590,18 @@ object Packet {
                 val raw = b.u(1).toInt()
                 if (raw > 1) return null
                 return Message.TextFocused(raw == 1)
+            }
+            26 -> {
+                if (b.size != 35) return null
+                val port = b.be16(1)
+                if (port == 0u.toUShort()) return null
+                return Message.BulkReady(port, b.copyOfRange(3, 35))
+            }
+            27 -> {
+                if (b.size < 4) return null
+                val length = b.be16(1).toInt()
+                if (length !in 1..MAX_CLIPBOARD_BYTES || b.size != 3 + length) return null
+                return Message.ClipboardText(strictUtf8(b, 3, b.size) ?: return null)
             }
             22 -> {
                 if (b.size != 17) return null
@@ -812,6 +860,27 @@ object Packet {
 
     fun encodeTextFocused(focused: Boolean): ByteArray =
         byteArrayOf(25, if (focused) 1 else 0)
+
+    /** [key] is 32 bytes by construction; anything else is a programming error. */
+    fun encodeBulkReady(port: UShort, key: ByteArray): ByteArray {
+        require(key.size == 32) { "a bulk key is 32 bytes" }
+        require(port != 0u.toUShort()) { "a bulk port has to dial somewhere" }
+        val out = mutableListOf<Byte>(26)
+        out.appendBE16(port)
+        return out.toByteArray() + key
+    }
+
+    /**
+     * null for text that is empty or will not fit, so a caller cannot put a
+     * frame on the wire the far end is obliged to refuse.
+     */
+    fun encodeClipboardText(text: String): ByteArray? {
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        if (bytes.size !in 1..MAX_CLIPBOARD_BYTES) return null
+        val out = mutableListOf<Byte>(27)
+        out.appendBE16(bytes.size.toUShort())
+        return out.toByteArray() + bytes
+    }
 
     /**
      * [text] in pieces that each fit one message, split between code points so
