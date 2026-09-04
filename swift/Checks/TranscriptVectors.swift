@@ -146,6 +146,13 @@ enum TranscriptVectors {
         var p = Pacer()
         var scenario = ""
         func fresh(_ name: String) { p = Pacer(); scenario = name }
+        // Mode rides in the transcript as an op of its own, so the replayer's
+        // fresh-instance-per-scenario rule needs no exception: a scenario that
+        // wants control says so on its first line.
+        func use(_ m: Pacer.Mode) {
+            p.use(m)
+            emit("pacer", scenario, "use", "mode=\(m == .control ? "control" : "watch")", "-")
+        }
         func admit(_ remote: TimeInterval, _ now: TimeInterval) {
             let remote = q(remote), now = q(now)
             let r = p.admit(remote: remote, now: now)
@@ -179,15 +186,37 @@ enum TranscriptVectors {
         admit(0.533, 2.3)
         admit(0.566, 2.61)
 
-        // Lateness that holds for two seconds is the link's new floor.
+        // Lateness that holds for two seconds is the link's new floor. Half a
+        // second late, not 0.4: 0.4 is the watch ceiling to fifteen decimal
+        // places, and a contract should not sit on a knife edge.
         fresh("floor")
         admit(0, 1)
-        admit(0.1, 1.5)
-        admit(0.2, 2.0)
-        admit(0.3, 2.5)
-        admit(0.4, 3.0)
-        admit(0.5, 3.5)   // lateSince + 2.0 reached
-        admit(0.533, 3.533)
+        admit(0.1, 1.6)
+        admit(0.2, 2.1)
+        admit(0.3, 2.6)
+        admit(0.4, 3.1)
+        admit(0.5, 3.6)   // lateSince + 2.0 reached
+        admit(0.533, 3.633)
+
+        // The same two scenarios with the pointer held. The ceiling is 120 ms
+        // and the floor is accepted after one second, so the burst's stale
+        // head is skipped where watch mode shows it, and the floor is adopted
+        // a second sooner.
+        fresh("burstControl")
+        use(.control)
+        admit(0, 1)
+        for i in 1 ..< 14 { admit(Double(i) / 30, 2) }
+        admit(0.5, 2.3)
+        admit(0.533, 2.3)
+        admit(0.566, 2.61)
+
+        fresh("floorControl")
+        use(.control)
+        admit(0, 1)
+        admit(0.1, 1.6)
+        admit(0.2, 2.1)
+        admit(0.3, 2.6)   // lateSince + 1.0 reached
+        admit(0.4, 3.1)
 
         // Travelled faster than the anchor frame: adopt it.
         fresh("fasterThanAnchor")

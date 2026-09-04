@@ -54,24 +54,57 @@ class Pacer {
     private var spread = 0.0
     /** Per admitted frame, so about 24 ms of give back per second at 30 fps. */
     private val ease = 0.0008
-    /** Cheap enough to pay on a good link, and about three frames at 60 fps. */
+    /**
+     * Cheap enough to pay on a good link, and about three frames at 60 fps.
+     * The same in both modes: the floor is what a quiet link costs, and a
+     * quiet link costs the same whoever is looking at it.
+     */
     private val minHold = 0.05
     /**
-     * The most delay worth paying to stay smooth. Above the old fixed value on
-     * purpose: a link that genuinely needs 150 ms should be allowed to have it
-     * rather than stutter at 120.
+     * The most delay worth paying to stay smooth, and the one number the two
+     * modes really disagree about. 120 ms while controlling: past that a
+     * pointer stops feeling attached to the finger. 400 ms while watching,
+     * because that is what the measured jitter actually needs and nobody
+     * watching can tell.
      */
-    private val maxHold = 0.20
+    private val maxHold: Double get() = if (mode == Mode.CONTROL) 0.12 else 0.40
     /** While a backlog drains, still surface a frame this often. */
     private val starvedAfter = 0.3
-    /** Lateness that holds this long is the link's new floor, not a burst still draining. */
-    private val floorAfter = 2.0
+    /**
+     * Lateness that holds this long is the link's new floor, not a burst still
+     * draining. Sooner while controlling: that rebase is what "latest frame
+     * wins" actually is.
+     */
+    private val floorAfter: Double get() = if (mode == Mode.CONTROL) 1.0 else 2.0
     /** Lateness beyond this is a clock artefact — sleep, the stamp wrapping — not congestion. */
     private val brokenAfter = 30.0
 
     private var anchor: Pair<Double, Double>? = null   // (remote, local)
     private var lastShown = Double.NEGATIVE_INFINITY
     private var lateSince: Double? = null
+
+    /**
+     * What this viewer is for, which decides how much delay it may buy
+     * smoothness with. One buffer cannot serve both jobs, and measuring said
+     * so: on an access point that adds 250-360 ms to everything, an Android
+     * viewer needs about 400 ms of buffer to look smooth, and 400 ms of buffer
+     * makes a pointer unusable. The person watching already chose by picking
+     * up the pointer.
+     */
+    enum class Mode { CONTROL, WATCH }
+
+    /** Watching, because that is what a viewer is doing when it joins. */
+    var mode: Mode = Mode.WATCH
+        private set
+
+    /**
+     * The pointer changed hands. The envelope is kept — the link is the same
+     * link — and only the ceiling moves, so taking control shrinks the hold at
+     * once and the picture jumps forward once to catch up.
+     */
+    fun use(mode: Mode) {
+        this.mode = mode
+    }
 
     /**
      * `remote` is the sender's clock at send, `now` this machine's clock at

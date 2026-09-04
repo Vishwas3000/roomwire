@@ -38,7 +38,7 @@ class TranscriptsTest {
             Row(f[0], f[1], f[2], f[3], f[4], line)
         }
         // A short read must fail loudly rather than pass over half the machines.
-        assertEquals(303, rows.size, "expected 303 steps, parsed ${rows.size}")
+        assertEquals(327, rows.size, "expected 327 steps, parsed ${rows.size}")
         assertEquals(
             setOf(
                 "chaingate", "pacer", "cursor", "pointer", "touch",
@@ -107,6 +107,10 @@ class TranscriptsTest {
                     Pacer.Verdict.DecodeOnly -> "decodeOnly"
                 }
                 "$vs late=${f(late)}"
+            }
+            "use" -> {
+                p.use(if (a["mode"] == "control") Pacer.Mode.CONTROL else Pacer.Mode.WATCH)
+                "-"
             }
             else -> fail("pacer: unknown op $op")
         }

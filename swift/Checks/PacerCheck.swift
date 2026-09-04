@@ -62,8 +62,11 @@ enum PacerCheck {
         }
 
         // A 300 ms stall, then the backlog at once: the stale body is decoded
-        // silently, the tail inside the hold is presented, in order.
-        p = Pacer()
+        // silently, the tail inside the hold is presented, in order. With the
+        // pointer held — in watch mode a frame 267 ms late is *inside* a
+        // 400 ms buffer and is meant to be shown; skipping the stale head is
+        // the control-mode contract.
+        p = Pacer(mode: .control)
         _ = p.admit(remote: 0, now: 10)
         var dues: [Double] = []
         var shownFrom: Int?

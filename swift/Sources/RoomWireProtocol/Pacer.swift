@@ -15,6 +15,28 @@ import Foundation
 /// cross machines: the sender's stamps are only compared with each other,
 /// anchored against this machine's clock at the best transit seen so far.
 public struct Pacer {
+    /// What this viewer is for, which decides how much delay it may buy
+    /// smoothness with.
+    ///
+    /// One buffer cannot serve both jobs, and measuring said so plainly. On an
+    /// office network where the access point adds 250–360 ms to everything —
+    /// the Mac's own ping to its gateway peaked at 251 ms on a 45 dB SNR link —
+    /// an Android viewer needs about 400 ms of buffer to look smooth, and 400
+    /// ms of buffer makes a pointer unusable. iOS never sees this because
+    /// MultipeerConnectivity runs over AWDL and never touches the access point;
+    /// Android has no AWDL and cannot.
+    ///
+    /// So it is a choice between two goods rather than a number to tune, and
+    /// the person watching already made it by picking up the pointer.
+    public enum Mode: Sendable {
+        /// Somebody is driving this Mac from over there. Latency is the whole
+        /// product; a stutter is the price.
+        case control
+        /// Somebody is watching. Smoothness is the whole product; a third of a
+        /// second of delay is invisible to a viewer and fatal to a pointer.
+        case watch
+    }
+
     public enum Verdict: Equatable {
         /// On schedule: show `after` seconds from now — its slot on the clock.
         case present(after: TimeInterval)
@@ -47,18 +69,27 @@ public struct Pacer {
     /// Per admitted frame, so about 24 ms of give back per second at 30 fps.
     private let ease: TimeInterval = 0.0008
     /// Cheap enough to pay on a good link, and about three frames at 60 fps.
+    /// The same in both modes: the floor is what a quiet link costs, and a
+    /// quiet link costs the same whoever is looking at it.
     private let minHold: TimeInterval = 0.05
-    /// The most delay worth paying to stay smooth. Above the old fixed value
-    /// on purpose: a link that genuinely needs 150 ms should be allowed to
-    /// have it rather than stutter at 120.
-    private let maxHold: TimeInterval = 0.20
+    /// The most delay worth paying to stay smooth, and the one number the two
+    /// modes really disagree about.
+    ///
+    /// 120 ms while controlling: past that a pointer stops feeling attached to
+    /// the finger, and a viewer who is driving would rather see a stutter than
+    /// aim at where things were a moment ago. 400 ms while watching, because
+    /// that is what the measured jitter actually needs and nobody watching can
+    /// tell.
+    private var maxHold: TimeInterval { mode == .control ? 0.12 : 0.40 }
     /// 1.2 headroom over observed jitter, the same margin the pointer uses.
     /// While a backlog drains, still surface a frame this often: a long stall
     /// reads as a slow slideshow, never a freeze.
     private let starvedAfter: TimeInterval = 0.3
     /// Lateness that holds this long is the link's new floor, not a burst
     /// still draining. Accept the added delay and get back to full rate.
-    private let floorAfter: TimeInterval = 2
+    /// Sooner while controlling: that rebase is what "latest frame wins"
+    /// actually is, and a viewer holding the pointer wants it quickly.
+    private var floorAfter: TimeInterval { mode == .control ? 1 : 2 }
     /// Lateness beyond this is a clock artefact — sleep, the 32-bit stamp
     /// wrapping — not congestion. Start over.
     private let brokenAfter: TimeInterval = 30
@@ -67,10 +98,24 @@ public struct Pacer {
     private var lastShown: TimeInterval = -.infinity
     private var lateSince: TimeInterval?
 
-    /// `remote` is the sender's clock at send, `now` this machine's clock at
-    /// arrival, both in seconds. The lateness comes back with the verdict —
-    /// it is the one number the choke analysis lives on.
-    public init() {}
+    public private(set) var mode: Mode
+
+    /// Watching, because that is what a viewer is doing when it joins. Control
+    /// is asked for and granted later, or never.
+    public init(mode: Mode = .watch) {
+        self.mode = mode
+    }
+
+    /// The pointer changed hands.
+    ///
+    /// The envelope is kept: the link is the same link it was a moment ago and
+    /// it has nothing to do with who is holding the pointer. Only the ceiling
+    /// moves, so taking control shrinks the hold at once and the picture jumps
+    /// forward once to catch up — which is the correct thing to happen to
+    /// somebody who just asked to drive.
+    public mutating func use(_ mode: Mode) {
+        self.mode = mode
+    }
 
     public mutating func admit(remote: TimeInterval, now: TimeInterval) -> (verdict: Verdict, lateness: TimeInterval) {
         guard let anchor else { return (rebase(remote, now), 0) }
