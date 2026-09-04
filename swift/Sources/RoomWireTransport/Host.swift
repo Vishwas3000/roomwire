@@ -167,7 +167,16 @@ public final class Host: @unchecked Sendable {
                 // Over 512 slices cannot be sent at all. Say so and ask for
                 // another keyframe rather than losing the one frame the stream
                 // cannot start without.
-                if !media.send(frame: data) {
+                //
+                // Parity on every frame others are built on, and not on the
+                // droppable enhancement layer. Byte 5 is the marker; bit 2 is
+                // the frame nothing depends on — the same peek Broadcast makes
+                // to shed those under load. A keyframe is never droppable, so
+                // it always carries parity, which is where a single loss hurts
+                // most. One datagram in six on a base-layer frame, on a link
+                // that has already proven it can lose one in six.
+                let base = !(data.count > 5 && data[5] & 4 == 4)
+                if !media.send(frame: data, parity: base) {
                     onPacket?(session.peer, Packet.needKeyframeMessage)
                 }
             } else if !media.send(message: data) {

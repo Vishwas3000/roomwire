@@ -83,15 +83,26 @@ final class OutboundMedia {
     /// caller can ask the encoder for another keyframe rather than lose one
     /// silently.
     @discardableResult
-    func send(frame: Data) -> Bool {
+    func send(frame: Data, parity: Bool = false) -> Bool {
         guard let slices = Chunker.slice(frame) else { return false }
         lock.lock()
         nextFrame &+= 1
         let id = nextFrame
         lock.unlock()
-        let sealed = slices.enumerated().map { index, body in
+        var sealed = slices.enumerated().map { index, body in
             sealer.seal(kind: .video, body: body, frameId: id,
                         index: UInt16(index), count: UInt16(slices.count))
+        }
+        // One extra datagram, last in the batch so the receiver has every data
+        // slice in hand before it — sent first, it would rebuild the final
+        // slice one datagram early on every frame. `index` carries the last
+        // slice's length, the one number the rebuild needs and the slicer
+        // writes nowhere else. Only when asked: the caller withholds it from
+        // the droppable enhancement frames, where a loss costs one frame and
+        // breaks no chain and parity would buy least.
+        if parity {
+            sealed.append(sealer.seal(kind: .parity, body: Parity.of(slices), frameId: id,
+                                      index: UInt16(slices.last!.count), count: UInt16(slices.count)))
         }
         hand(over: sealed)
         return true
