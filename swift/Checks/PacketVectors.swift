@@ -235,6 +235,12 @@ enum PacketVectors {
         encode("textFocused.true", Packet.encodeTextFocused(true))
         encode("textFocused.false", Packet.encodeTextFocused(false))
 
+        // Handed back byte for byte, so the only vector worth freezing is that
+        // the four bytes survive the trip out and are not reinterpreted.
+        encode("echo", Packet.encodeEcho(ms: 0x1234_5678))
+        encode("echo.zero", Packet.encodeEcho(ms: 0))
+        encode("echo.wrapped", Packet.encodeEcho(ms: .max))
+
         encode("bulkReady", Packet.encodeBulkReady(port: 0xC001, key: mediaKey))
         encode("clipboardText", Packet.encodeClipboardText("copied")!)
         encode("clipboardText.utf8", Packet.encodeClipboardText("héllo 👍")!)
@@ -584,6 +590,8 @@ enum PacketVectors {
         reject("clipboardText.past8k",
                Data([27, 0x20, 0x01]) + Data(repeating: 0x78, count: 8193))
 
+        reject("echo.short", Data([28, 0, 0, 0]))
+        reject("echo.long", Data([28, 0, 0, 0, 0, 0]))
         reject("textFocused.notABoolean", Data([25, 2]))
         reject("textFocused.headerOnly", Data([25]))
         reject("textFocused.long", Data([25, 0, 0]))
@@ -685,6 +693,7 @@ enum PacketVectors {
         case .systemGesture(let g): return Packet.encodeSystemGesture(g)
         case .typeText(let text): return Packet.encodeTypeText(text) ?? Data()
         case .key(let which): return Packet.encodeKey(which)
+        case .echo(let ms): return Packet.encodeEcho(ms: ms)
         case .textFocused(let focused): return Packet.encodeTextFocused(focused)
         case .bulkReady(let port, let key): return Packet.encodeBulkReady(port: port, key: key)
         case .clipboardText(let text): return Packet.encodeClipboardText(text) ?? Data()

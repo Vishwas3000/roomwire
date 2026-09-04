@@ -236,6 +236,20 @@ public enum Packet {
         /// a key exchange to send "hello" would be absurd. Anything larger
         /// than this, and every clipboard image, goes as a transfer instead.
         case clipboardText(String)                                      // either way
+        /// A stamp to hand straight back, untouched.
+        ///
+        /// The one thing on this wire that measures the link rather than the
+        /// picture. Both ends send it and both ends return it, so whoever asked
+        /// subtracts against a clock only they have to own — the same trick as
+        /// `input`'s `sawMs`, and for the same reason: two machines agreeing on
+        /// what time it is costs a protocol, and neither end needs to.
+        ///
+        /// It is the *control* lane it measures, not a ping. That is the point.
+        /// Clicks and keystrokes ride this lane, so what a reply waits through
+        /// here — a retransmit, a queue behind a keyframe — is what they wait
+        /// through too, and an ICMP-style probe on another lane would report a
+        /// happier number than anybody experiences.
+        case echo(ms: UInt32)                                           // either way
         /// Whether the thing with keyboard focus on the presenter's Mac takes
         /// text. A viewer showing a picture of a screen cannot tell a search
         /// field from a button, so the only side that can answer this is the
@@ -313,7 +327,7 @@ public enum Packet {
     /// is deliberately *not* a licence to ignore a malformed known message:
     /// those still close the connection, because a peer that cannot encode
     /// what it claims to be sending is not one to keep guessing at.
-    public static let highestKnownId: UInt8 = 27
+    public static let highestKnownId: UInt8 = 28
 
     public static func decodeMessage(_ data: Data) -> Message? {
         switch data.first {
@@ -458,6 +472,10 @@ public enum Packet {
             guard (1 ... maxClipboardBytes).contains(length), b.count == 3 + length,
                   let text = String(validating: b[3...], as: UTF8.self) else { return nil }
             return .clipboardText(text)
+        case 28:
+            let b = [UInt8](data)
+            guard b.count == 5 else { return nil }
+            return .echo(ms: be32(b, 1))
         case 21:
             let b = [UInt8](data)
             guard b.count == 17 else { return nil }
@@ -709,6 +727,14 @@ public enum Packet {
 
     public static func encodeKey(_ which: Key) -> Data {
         Data([24, which.rawValue])
+    }
+
+    /// Returned by the far end byte for byte. Whatever the sender put in it is
+    /// the sender's business — nothing at the other end reads it.
+    public static func encodeEcho(ms: UInt32) -> Data {
+        var out = Data([28])
+        out.appendBE(ms)
+        return out
     }
 
     public static func encodeTextFocused(_ focused: Bool) -> Data {

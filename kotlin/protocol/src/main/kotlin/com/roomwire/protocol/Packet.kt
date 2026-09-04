@@ -336,6 +336,20 @@ object Packet {
         data class Key(val key: Packet.Key) : Message
 
         /**
+         * Either way. A stamp to hand straight back, untouched.
+         *
+         * The one thing on this wire that measures the link rather than the
+         * picture. Both ends send it and both ends return it, so whoever asked
+         * subtracts against a clock only they have to own — the same trick as
+         * [Input.sawMs], and for the same reason.
+         *
+         * It is the *control* lane it measures, not a ping. Clicks and
+         * keystrokes ride this lane, so what a reply waits through here is what
+         * they wait through too.
+         */
+        data class Echo(val ms: UInt) : Message
+
+        /**
          * host -> viewer. Whether the thing with keyboard focus on the
          * presenter's Mac takes text. A viewer showing a picture of a screen
          * cannot tell a search field from a button, so the only side that can
@@ -464,7 +478,7 @@ object Packet {
      * than fatal. Not a licence to ignore a malformed *known* message: those
      * still close the connection.
      */
-    const val HIGHEST_KNOWN_ID: Int = 27
+    const val HIGHEST_KNOWN_ID: Int = 28
 
     fun decodeMessage(b: ByteArray): Message? {
         when (b.firstOrNull()?.toUByte()?.toInt()) {
@@ -618,6 +632,10 @@ object Packet {
                 val length = b.be16(1).toInt()
                 if (length !in 1..MAX_CLIPBOARD_BYTES || b.size != 3 + length) return null
                 return Message.ClipboardText(strictUtf8(b, 3, b.size) ?: return null)
+            }
+            28 -> {
+                if (b.size != 5) return null
+                return Message.Echo(b.be32(1))
             }
             22 -> {
                 if (b.size != 17) return null
@@ -874,6 +892,16 @@ object Packet {
     }
 
     fun encodeKey(key: Key): ByteArray = byteArrayOf(24, key.raw.toByte())
+
+    /**
+     * Returned by the far end byte for byte. Whatever the sender put in it is
+     * the sender's business — nothing at the other end reads it.
+     */
+    fun encodeEcho(ms: UInt): ByteArray {
+        val out = mutableListOf<Byte>(28)
+        out.appendBE(ms)
+        return out.toByteArray()
+    }
 
     fun encodeTextFocused(focused: Boolean): ByteArray =
         byteArrayOf(25, if (focused) 1 else 0)
