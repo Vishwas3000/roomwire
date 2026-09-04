@@ -198,6 +198,12 @@ enum PacketVectors {
         // Encode masks the undefined bits away; decode refuses them. The two
         // are deliberately not symmetric.
         encode("input.maskedToThree", Packet.encodeInput(buttons: 0xFF, x: 0, y: 0))
+        encode("input.aimed", Packet.encodeInput(buttons: 1, x: 0.25, y: 0.75, sawMs: 0x0102_0304))
+        // The one message on this wire with two lengths. A viewer built before
+        // the stamp existed sends ten bytes and must still be understood: the
+        // field is a measurement, and refusing the message would cost control
+        // of the Mac to gain a diagnostic.
+        accept("input.unstamped", Data([14, 1]) + be32(0x3E80_0000) + be32(0x3F40_0000))
 
         encode("scroll.positive", Packet.encodeScroll(dx: 120, dy: 45))
         encode("scroll.negative", Packet.encodeScroll(dx: -120, dy: -45))
@@ -671,7 +677,8 @@ enum PacketVectors {
         case .needRefresh: return Packet.needRefreshMessage
         case .flight(let records): return Packet.encodeFlight(records)
         case .probe(let samples): return Packet.encodeProbe(samples)
-        case .input(let buttons, let x, let y): return Packet.encodeInput(buttons: buttons, x: x, y: y)
+        case .input(let buttons, let x, let y, let sawMs):
+            return Packet.encodeInput(buttons: buttons, x: x, y: y, sawMs: sawMs)
         case .scroll(let dx, let dy): return Packet.encodeScroll(dx: dx, dy: dy)
         case .requestControl: return Packet.requestControlMessage
         case .controlGranted(let granted): return Packet.encodeControlGranted(granted)

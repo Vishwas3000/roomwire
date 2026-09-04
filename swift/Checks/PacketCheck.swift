@@ -236,16 +236,28 @@ enum PacketCheck {
 
         // Control. These decode into injected mouse events on somebody else's
         // Mac, so the refusals below matter more than the round trips above.
-        guard case .input(let buttons, let ix, let iy)? =
-                Packet.decodeMessage(Packet.encodeInput(buttons: 3, x: 0.25, y: 0.75)) else {
+        guard case .input(let buttons, let ix, let iy, let sawMs)? =
+                Packet.decodeMessage(Packet.encodeInput(buttons: 3, x: 0.25, y: 0.75,
+                                                        sawMs: 0xDEAD_BEEF)) else {
             fatalError("input did not decode")
         }
         assert(buttons == 3, "input buttons round trip")
         assert(abs(ix - 0.25) < 0.0001 && abs(iy - 0.75) < 0.0001, "input position round trip")
+        assert(sawMs == 0xDEAD_BEEF, "input sawMs round trip")
+
+        // Ten bytes is a viewer built before the stamp existed. It still holds
+        // the mouse; it just cannot say what it was looking at.
+        guard case .input(_, _, _, let noStamp)? =
+                Packet.decodeMessage(Data([14, 1] + [UInt8](repeating: 0, count: 8))) else {
+            fatalError("an unstamped input was refused")
+        }
+        assert(noStamp == 0, "an unstamped input should read as 0")
+        assert(Packet.decodeMessage(Data([14, 1] + [UInt8](repeating: 0, count: 10))) == nil,
+               "a twelve-byte input accepted")
 
         // An off-screen coordinate is what confines a click to the shared
         // screen; encode clamps it and decode refuses it outright.
-        guard case .input(_, let clampedX, let clampedY)? =
+        guard case .input(_, let clampedX, let clampedY, _)? =
                 Packet.decodeMessage(Packet.encodeInput(buttons: 1, x: -2, y: 9)) else {
             fatalError("clamped input did not decode")
         }

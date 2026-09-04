@@ -299,8 +299,19 @@ object Packet {
          * *whole state* — bit0 left, bit1 right — not a click, so a message
          * lost or arriving out of order is corrected by the next one rather
          * than leaving a button held down on the presenter's Mac forever.
+         *
+         * [sawMs] is the sentMs of the frame that was on this viewer's screen
+         * when the pointer was aimed, echoed back untouched. It is the host's
+         * own steady clock, so the host subtracts and gets the whole round trip
+         * without either end agreeing on what time it is. Nothing is actuated
+         * on it. 0 when no frame has been shown yet.
          */
-        data class Input(val buttons: UByte, val x: Double, val y: Double) : Message
+        data class Input(
+            val buttons: UByte,
+            val x: Double,
+            val y: Double,
+            val sawMs: UInt,
+        ) : Message
 
         /** viewer -> host. Pixel deltas, as a finger on glass describes them. */
         data class Scroll(val dx: Short, val dy: Short) : Message
@@ -532,9 +543,14 @@ object Packet {
                 // Unknown button bits are refused rather than masked off: a peer
                 // that means something we do not understand is not one to guess
                 // at while holding the presenter's mouse.
-                if (b.size != 10 || b.u(1) > 3u) return null
+                //
+                // Two lengths, and the only message here with two. sawMs is a
+                // measurement nothing is actuated on, so a peer built before it
+                // existed is worth more than the exactness. A short frame means
+                // "did not say", never a different meaning.
+                if ((b.size != 10 && b.size != 14) || b.u(1) > 3u) return null
                 val (x, y) = point(b, 2) ?: return null
-                return Message.Input(b.u(1), x, y)
+                return Message.Input(b.u(1), x, y, if (b.size == 14) b.be32(10) else 0u)
             }
             15 -> {
                 if (b.size != 5) return null
@@ -826,9 +842,10 @@ object Packet {
      * park a layer at infinity; it now also confines an injected click to the
      * screen actually being shared, which is a good deal more load-bearing.
      */
-    fun encodeInput(buttons: UByte, x: Double, y: Double): ByteArray {
+    fun encodeInput(buttons: UByte, x: Double, y: Double, sawMs: UInt = 0u): ByteArray {
         val out = mutableListOf<Byte>(14, (buttons and 3u).toByte())
         out.appendPoint(x, y)
+        out.appendBE(sawMs)
         return out.toByteArray()
     }
 

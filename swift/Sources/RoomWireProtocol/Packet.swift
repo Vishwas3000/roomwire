@@ -191,7 +191,15 @@ public enum Packet {
         /// bit0 left, bit1 right — not a click, so a message lost or arriving
         /// out of order is corrected by the next one rather than leaving a
         /// button held down on the presenter's Mac forever. See Control.swift.
-        case input(buttons: UInt8, x: Double, y: Double)                // viewer -> host
+        ///
+        /// `sawMs` is the `sentMs` of the frame that was on the viewer's screen
+        /// when this was aimed, echoed back untouched. It is the host's own
+        /// steady clock, so the host subtracts and gets the whole round trip —
+        /// encode, send, decode, buffer, the hand, and the way back — without
+        /// either end having to agree on what time it is. Nothing is actuated
+        /// on it: it is what the timing work is measured against. 0 when the
+        /// viewer has not shown a frame yet.
+        case input(buttons: UInt8, x: Double, y: Double, sawMs: UInt32)  // viewer -> host
         /// Pixel deltas, as a finger on glass describes them.
         case scroll(dx: Int16, dy: Int16)                               // viewer -> host
         /// A viewer asking for the pointer. The presenter answers, or does
@@ -378,8 +386,17 @@ public enum Packet {
             // Unknown button bits are refused rather than masked off: a peer
             // that means something we do not understand is not one to guess at
             // while holding the presenter's mouse.
-            guard b.count == 10, b[1] <= 3, let point = point(b, 2) else { return nil }
-            return .input(buttons: b[1], x: point.x, y: point.y)
+            //
+            // Two lengths, and the only message here with two. `sawMs` is a
+            // measurement nothing is actuated on, so a peer built before it
+            // existed is worth more than the exactness — the alternative is a
+            // version bump that stops those peers connecting at all, over a
+            // number used to draw a diagnostic line. A short frame means "did
+            // not say", never a different meaning.
+            guard b.count == 10 || b.count == 14, b[1] <= 3,
+                  let point = point(b, 2) else { return nil }
+            return .input(buttons: b[1], x: point.x, y: point.y,
+                          sawMs: b.count == 14 ? be32(b, 10) : 0)
         case 15:
             let b = [UInt8](data)
             guard b.count == 5 else { return nil }
@@ -658,9 +675,10 @@ public enum Packet {
     /// unit square. That guard was written so a hostile coordinate could not
     /// park a layer at infinity; it now also confines an injected click to the
     /// screen actually being shared, which is a good deal more load-bearing.
-    public static func encodeInput(buttons: UInt8, x: Double, y: Double) -> Data {
+    public static func encodeInput(buttons: UInt8, x: Double, y: Double, sawMs: UInt32 = 0) -> Data {
         var out = Data([14, buttons & 3])
         out.appendPoint(x, y)
+        out.appendBE(sawMs)
         return out
     }
 

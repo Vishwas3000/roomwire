@@ -31,7 +31,7 @@ class PacketVectorsTest {
         }
         // A short read must fail loudly rather than report a green suite over
         // half the format.
-        assertEquals(216, rows.size, "expected 216 vectors, parsed ${rows.size}")
+        assertEquals(218, rows.size, "expected 218 vectors, parsed ${rows.size}")
 
         return rows.map { (name, verdict, hex) ->
             DynamicTest.dynamicTest("$verdict $name") { check(name, verdict, unhex(hex)) }
@@ -120,7 +120,7 @@ class PacketVectorsTest {
             Packet.Message.NeedRefresh -> Packet.needRefreshMessage
             is Packet.Message.Flight -> Packet.encodeFlight(m.records)
             is Packet.Message.Probe -> Packet.encodeProbe(m.samples)
-            is Packet.Message.Input -> Packet.encodeInput(m.buttons, m.x, m.y)
+            is Packet.Message.Input -> Packet.encodeInput(m.buttons, m.x, m.y, m.sawMs)
             is Packet.Message.Scroll -> Packet.encodeScroll(m.dx, m.dy)
             Packet.Message.RequestControl -> Packet.requestControlMessage
             is Packet.Message.ControlGranted -> Packet.encodeControlGranted(m.granted)
@@ -247,6 +247,7 @@ class PacketVectorsTest {
         "input.both" -> Packet.encodeInput(3u, 1.0, 1.0)
         // Encode masks the undefined bits away; decode refuses them.
         "input.maskedToThree" -> Packet.encodeInput(0xFFu, 0.0, 0.0)
+        "input.aimed" -> Packet.encodeInput(1u, 0.25, 0.75, 0x0102_0304u)
 
         "scroll.positive" -> Packet.encodeScroll(120, 45)
         "scroll.negative" -> Packet.encodeScroll(-120, -45)
