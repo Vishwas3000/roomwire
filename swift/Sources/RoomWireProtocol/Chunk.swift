@@ -3,15 +3,21 @@ import Foundation
 /// One datagram on the media lane: a 17-byte cleartext header, the body under
 /// ChaCha20-Poly1305 with that header as associated data, then the 16-byte tag.
 ///
-///   [0]      kind: 0 a slice of a video frame, 1 a whole small message, 2 a ping
+///   [0]      kind: 0 a slice of a video frame, 1 a whole small message, 2 a ping,
+///            4 the parity of one frame's slices (see `Parity`)
 ///   [1..8]   counter: per sender, per session, from 1, +1 every datagram. The
 ///            AEAD nonce and the replay window both hang off it, and the key it
 ///            is used under lives exactly as long as it does — see `MediaSeal`.
 ///   [9..12]  frame id: video only — per connection, +1 per frame sent. Ignored
 ///            for a message or a ping, and *not* checked: neither end has any
 ///            use for it there, so there is nothing for a decoder to enforce.
-///   [13..14] index of this slice within its frame
-///   [15..16] slices in the frame: 1…512 for video, exactly 1 for anything else
+///   [13..14] index of this slice within its frame — or, for a parity, the
+///            length of the frame's last slice, 1…1367. A parity has no slot of
+///            its own (one per frame) and the slicer writes no length anywhere,
+///            so this is where the one number a repair needs rides. The field
+///            was already kind-conditional: frame id means nothing for a
+///            message, count is pinned to 1 for anything but video.
+///   [15..16] slices in the frame: 1…512 for video and parity, exactly 1 else
 ///
 /// 1400 bytes is the datagram ceiling. A real-time stream never leans on IP
 /// fragmentation, and 1400 plus UDP/IP headers fits every link this is meant
@@ -26,7 +32,12 @@ public enum ChunkHeader {
     /// anything we produce, so more is refused rather than trusted with a buffer.
     public static let maxChunks: UInt16 = 512
 
-    public enum Kind: UInt8 { case video = 0, message = 1, ping = 2 }
+    /// 3 is deliberately unallocated: it is the byte the `chunk.unknownKind`
+    /// vector uses to prove an unknown kind is refused. A grouped parity — one
+    /// per eight slices, say — would have to be a *new* kind (5): a receiver
+    /// that knows only 4 would apply a group's parity to the whole frame and
+    /// deliver a corrupt one.
+    public enum Kind: UInt8 { case video = 0, message = 1, ping = 2, parity = 4 }
 
     public struct Fields: Equatable {
         public let kind: Kind
@@ -51,15 +62,21 @@ public enum ChunkHeader {
     }
 
     /// Reads the header off the front of a datagram. Network input: the kind
-    /// must be one we know, the count 1…512 and exactly 1 for anything that is
-    /// not video, and the index must fall inside the count.
+    /// must be one we know and the count 1…512; then what index means, and
+    /// what count may be, depends on the kind — a slice's index falls inside
+    /// the count, a parity's index is a slice length inside the body, and a
+    /// message or ping is exactly one chunk at index 0.
     public static func decode(_ d: Data) -> Fields? {
         guard d.count >= size else { return nil }
         let b = [UInt8](d.prefix(size))
         guard let kind = Kind(rawValue: b[0]) else { return nil }
         let index = Packet.be16(b, 13), count = Packet.be16(b, 15)
-        guard count >= 1, count <= maxChunks, index < count else { return nil }
-        guard kind == .video || count == 1 else { return nil }
+        guard count >= 1, count <= maxChunks else { return nil }
+        switch kind {
+        case .video: guard index < count else { return nil }
+        case .parity: guard index >= 1, Int(index) <= body else { return nil }
+        case .message, .ping: guard count == 1, index == 0 else { return nil }
+        }
         return Fields(kind: kind, counter: Packet.be64(b, 1), frameId: Packet.be32(b, 9),
                       index: index, count: count)
     }

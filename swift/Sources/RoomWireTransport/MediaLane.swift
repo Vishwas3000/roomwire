@@ -283,6 +283,12 @@ final class InboundMedia {
                     if !body.isEmpty { onPacket?(body) }
                 case .ping:
                     break
+                case .parity:
+                    // Dropped, for now: a receiver that cannot repair behaves
+                    // exactly like one built before the kind existed. Handing
+                    // it to a reassembler that does not know parity would have
+                    // it stored as a slice at index L.
+                    break
                 }
             }
             if error != nil { return closedOnce() }

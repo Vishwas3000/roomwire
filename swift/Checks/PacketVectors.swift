@@ -330,12 +330,17 @@ enum PacketVectors {
     static let videoFields = ChunkHeader.Fields(kind: .video, counter: 7, frameId: 0x0102_0304, index: 2, count: 150)
     static let messageFields = ChunkHeader.Fields(kind: .message, counter: 8, frameId: 0, index: 0, count: 1)
     static let pingFields = ChunkHeader.Fields(kind: .ping, counter: 9, frameId: 0, index: 0, count: 1)
+    // index is the frame's last-slice length for a parity, so 100 here is a
+    // 100-byte tail, not a slot. count 150 also proves the decoder no longer
+    // pins non-video kinds to a single chunk.
+    static let parityFields = ChunkHeader.Fields(kind: .parity, counter: 10, frameId: 0x0102_0304, index: 100, count: 150)
     static let body16 = Data((0 ..< 16).map(UInt8.init))
 
     static func media() {
         encode("chunk.video", ChunkHeader.encode(videoFields))
         encode("chunk.message", ChunkHeader.encode(messageFields))
         encode("chunk.ping", ChunkHeader.encode(pingFields))
+        encode("chunk.parity", ChunkHeader.encode(parityFields))
 
         // ChaCha20-Poly1305 is deterministic in key, nonce, header and body,
         // which is what lets an envelope be a byte vector at all. Key 00…1f,
@@ -343,6 +348,7 @@ enum PacketVectors {
         encode("seal.video", MediaSeal.seal(videoFields, body: body16, key: sealKey, lane: 0))
         encode("seal.message", MediaSeal.seal(messageFields, body: Packet.needKeyframeMessage, key: sealKey, lane: 0))
         encode("seal.ping", MediaSeal.seal(pingFields, body: Data(), key: sealKey, lane: 0))
+        encode("seal.parity", MediaSeal.seal(parityFields, body: body16, key: sealKey, lane: 0))
 
         // Six characters both screens show; here as the ASCII they are. Both
         // nonces are in it, and the order they were fixed in is what makes six
@@ -362,6 +368,9 @@ enum PacketVectors {
         // without changing any other line in this file.
         accept("chunk.countAtCap",
                ChunkHeader.encode(.init(kind: .video, counter: 7, frameId: 1, index: 511, count: 512)))
+        // A parity whose last slice is a full one: 1367 is the inclusive edge.
+        accept("chunk.parity.lengthAtBody",
+               ChunkHeader.encode(.init(kind: .parity, counter: 10, frameId: 1, index: 1367, count: 150)))
         // A counter with its top half set: the only vector that would notice a
         // 32-bit read, or a signed one on the JVM.
         encode("seal.counterMax",
@@ -498,6 +507,10 @@ enum PacketVectors {
         unknownKind[0] = 3
         reject("chunk.unknownKind", unknownKind)
         reject("chunk.messageMultiChunk", ChunkHeader.encode(.init(kind: .message, counter: 8, frameId: 0, index: 0, count: 2)))
+        // A parity's index is a slice length: the slicer never emits an empty
+        // slice, and nothing is longer than the body.
+        reject("chunk.parity.lengthZero", ChunkHeader.encode(.init(kind: .parity, counter: 10, frameId: 1, index: 0, count: 150)))
+        reject("chunk.parity.lengthPastBody", ChunkHeader.encode(.init(kind: .parity, counter: 10, frameId: 1, index: 1368, count: 150)))
         reject("chunk.short", ChunkHeader.encode(videoFields).prefix(16))
 
         // The envelope: one bit anywhere — tag, or the header it authenticates

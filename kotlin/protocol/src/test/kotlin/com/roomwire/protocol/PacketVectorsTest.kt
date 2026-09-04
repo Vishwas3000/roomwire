@@ -31,7 +31,7 @@ class PacketVectorsTest {
         }
         // A short read must fail loudly rather than report a green suite over
         // half the format.
-        assertEquals(228, rows.size, "expected 228 vectors, parsed ${rows.size}")
+        assertEquals(233, rows.size, "expected 233 vectors, parsed ${rows.size}")
 
         return rows.map { (name, verdict, hex) ->
             DynamicTest.dynamicTest("$verdict $name") { check(name, verdict, unhex(hex)) }
@@ -358,12 +358,14 @@ class PacketVectorsTest {
         "chunk.video" -> ChunkHeader.encode(videoFields)
         "chunk.message" -> ChunkHeader.encode(messageFields)
         "chunk.ping" -> ChunkHeader.encode(pingFields)
+        "chunk.parity" -> ChunkHeader.encode(parityFields)
 
         // ChaCha20-Poly1305 is deterministic in key, nonce, header and body. Key
         // 00…1f, lane 0 (host to viewer).
         "seal.video" -> MediaSeal.seal(videoFields, ByteArray(16) { it.toByte() }, mediaKey, 0u)
         "seal.message" -> MediaSeal.seal(messageFields, Packet.needKeyframeMessage, mediaKey, 0u)
         "seal.ping" -> MediaSeal.seal(pingFields, ByteArray(0), mediaKey, 0u)
+        "seal.parity" -> MediaSeal.seal(parityFields, ByteArray(16) { it.toByte() }, mediaKey, 0u)
         // A counter with its top half set: the only vector that would notice a
         // 32-bit read, or a signed one on the JVM.
         "seal.counterMax" -> MediaSeal.seal(
@@ -409,6 +411,7 @@ class PacketVectorsTest {
         val videoFields = ChunkHeader.Fields(ChunkHeader.Kind.VIDEO, 7uL, 0x01020304u, 2u.toUShort(), 150u.toUShort())
         val messageFields = ChunkHeader.Fields(ChunkHeader.Kind.MESSAGE, 8uL, 0u, 0u.toUShort(), 1u.toUShort())
         val pingFields = ChunkHeader.Fields(ChunkHeader.Kind.PING, 9uL, 0u, 0u.toUShort(), 1u.toUShort())
+        val parityFields = ChunkHeader.Fields(ChunkHeader.Kind.PARITY, 10uL, 0x01020304u, 100u.toUShort(), 150u.toUShort())
 
         fun unhex(s: String) = ByteArray(s.length / 2) {
             s.substring(it * 2, it * 2 + 2).toInt(16).toByte()

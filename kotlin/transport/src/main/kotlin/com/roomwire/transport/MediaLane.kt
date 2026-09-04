@@ -152,6 +152,8 @@ class MediaLane(private val scope: CoroutineScope) {
                     reassembler.absorb(fields, body, System.nanoTime() / 1e9)?.let { onPacket?.invoke(it) }
                 ChunkHeader.Kind.MESSAGE -> if (body.isNotEmpty()) onPacket?.invoke(body)
                 ChunkHeader.Kind.PING -> Unit
+                // Dropped until the reassembler can repair; see the Swift twin.
+                ChunkHeader.Kind.PARITY -> Unit
             }
         }
     }

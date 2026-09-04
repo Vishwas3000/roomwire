@@ -27,8 +27,16 @@ object ChunkHeader {
     /** 512 slices is 700 KB, past anything the encoder produces; more is refused. */
     val MAX_CHUNKS: UShort = 512u
 
+    /**
+     * 3 is deliberately unallocated: it is the byte the `chunk.unknownKind`
+     * vector uses to prove an unknown kind is refused. A grouped parity would
+     * have to be a new kind (5) — a receiver that knows only 4 would apply a
+     * group's parity to the whole frame and deliver a corrupt one.
+     */
     enum class Kind(val raw: UByte) {
-        VIDEO(0u), MESSAGE(1u), PING(2u);
+        VIDEO(0u), MESSAGE(1u), PING(2u),
+        /** The XOR of one frame's slices; `index` carries the last slice's length. */
+        PARITY(4u);
 
         companion object {
             fun of(raw: UByte): Kind? = Kind.entries.firstOrNull { it.raw == raw }
@@ -48,16 +56,23 @@ object ChunkHeader {
 
     /**
      * Reads the header off the front of a datagram. Network input: the kind
-     * must be one we know, the count 1…512 and exactly 1 for anything that is
-     * not video, and the index must fall inside the count.
+     * must be one we know and the count 1…512; then what index means, and what
+     * count may be, depends on the kind — a slice's index falls inside the
+     * count, a parity's index is a slice length inside the body, and a message
+     * or ping is exactly one chunk at index 0.
      */
     fun decode(d: ByteArray): Fields? {
         if (d.size < SIZE) return null
         val kind = Kind.of(d.u(0)) ?: return null
         val index = d.be16(13)
         val count = d.be16(15)
-        if (count < 1u || count > MAX_CHUNKS || index >= count) return null
-        if (kind != Kind.VIDEO && count != 1u.toUShort()) return null
+        if (count < 1u || count > MAX_CHUNKS) return null
+        val ok = when (kind) {
+            Kind.VIDEO -> index < count
+            Kind.PARITY -> index >= 1u && index.toInt() <= BODY
+            Kind.MESSAGE, Kind.PING -> count == 1u.toUShort() && index == 0u.toUShort()
+        }
+        if (!ok) return null
         return Fields(kind, d.be64(1), d.be32(9), index, count)
     }
 }
