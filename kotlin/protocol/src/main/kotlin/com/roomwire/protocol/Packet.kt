@@ -649,7 +649,12 @@ object Packet {
     internal fun nameBytes(name: String): ByteArray = clampName(name).toByteArray(StandardCharsets.UTF_8)
 
     /** null for anything that is not well-formed UTF-8; String(bytes) would quietly substitute. */
-    private fun strictUtf8(b: ByteArray, from: Int, to: Int): String? = try {
+    /**
+     * internal rather than private: Transfer's offer carries a name and a mime
+     * type off the same wire under the same rule, and one definition of "is
+     * this really UTF-8" is the point.
+     */
+    internal fun strictUtf8(b: ByteArray, from: Int, to: Int): String? = try {
         StandardCharsets.UTF_8.newDecoder()
             .onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)

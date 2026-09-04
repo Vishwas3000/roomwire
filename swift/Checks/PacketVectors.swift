@@ -228,6 +228,37 @@ enum PacketVectors {
 
         encode("textFocused.true", Packet.encodeTextFocused(true))
         encode("textFocused.false", Packet.encodeTextFocused(false))
+
+        // The transfer codec, unsealed. Pure bytes, so these pin the format
+        // itself rather than the envelope around it.
+        let head = Data((0 ..< 32).map { UInt8(0xA0 &+ $0) })
+        let whole = Data((0 ..< 32).map { UInt8(0xB0 &+ $0) })
+        encode("transfer.offer", Transfer.encode(.offer(.init(
+            id: 7, size: 0x0102_0304_0506_0708, mtimeMs: 0x1122_3344_5566_7788,
+            headHash: head, name: "holiday.jpg", mime: "image/jpeg"))))
+        // A name that is multi-byte and a mime type that is empty: the two
+        // length fields are the only thing keeping them apart.
+        encode("transfer.offer.utf8", Transfer.encode(.offer(.init(
+            id: 1, size: 5, mtimeMs: 0, headHash: head, name: "hé👍.txt", mime: ""))))
+        encode("transfer.offer.clipboard", Transfer.encode(.offer(.init(
+            id: 2, size: 11, mtimeMs: 0, headHash: head, isClipboard: true,
+            name: "clipboard", mime: "text/plain"))))
+        encode("transfer.accept", Transfer.encode(.accept(id: 7, offset: 0xDEAD_BEEF)))
+        encode("transfer.accept.zero", Transfer.encode(.accept(id: 7, offset: 0)))
+        encode("transfer.reject", Transfer.encode(.reject(id: 7, reason: .noSpace)))
+        encode("transfer.data", Transfer.encode(.data(id: 7, bytes: Data([1, 2, 3, 4]))))
+        encode("transfer.done", Transfer.encode(.done(id: 7, sha256: whole)))
+        encode("transfer.cancel", Transfer.encode(.cancel(id: 7, reason: .declined)))
+        encode("transfer.bye", Transfer.encode(.bye))
+
+        // The bulk envelope. A fresh sealer each time, so every vector is
+        // counter 1 and a fresh opener on the other side can check it without
+        // the vectors having to be replayed in order.
+        func sealedOnce(_ plaintext: Data) -> Data {
+            Bulk.Sealer(key: sealKey, lane: .hostToViewer).seal(plaintext)
+        }
+        encode("bulk.bye", sealedOnce(Transfer.encode(.bye)))
+        encode("bulk.data", sealedOnce(Transfer.encode(.data(id: 3, bytes: Data([9, 8, 7])))))
     }
 
     // MARK: - Transport, ids 19 and 20
@@ -486,6 +517,49 @@ enum PacketVectors {
         reject("key.unknown", Data([24, 99]))
         reject("key.headerOnly", Data([24]))
         reject("key.long", Data([24, 0, 0]))
+        // The transfer codec, refused.
+        let anyHash = Data(repeating: 0xC3, count: 32)
+        let goodOffer = Transfer.encode(.offer(.init(id: 1, size: 1, mtimeMs: 1,
+                                                    headHash: anyHash, name: "a", mime: "b")))
+        reject("transfer.offer.short", goodOffer.prefix(53))
+        reject("transfer.offer.nameZero", {
+            var b = [UInt8](goodOffer); b[52] = 0; b[53] = 0; return Data(b)
+        }())
+        // A lone continuation byte where the name is: not UTF-8, not a name.
+        reject("transfer.offer.badUtf8", {
+            var b = [UInt8](goodOffer); b[54] = 0x80; return Data(b)
+        }())
+        reject("transfer.offer.trailing", goodOffer + Data([0]))
+        reject("transfer.offer.flagNotABoolean", {
+            var b = [UInt8](goodOffer); b[51] = 2; return Data(b)
+        }())
+        reject("transfer.accept.short", Data([2, 0, 7]))
+        reject("transfer.accept.long", Data([2]) + Data(repeating: 0, count: 11))
+        reject("transfer.reject.unknownReason", Data([3, 0, 7, 99]))
+        reject("transfer.data.empty", Data([4, 0, 7]))
+        reject("transfer.done.short", Data([5, 0, 7]) + Data(repeating: 0, count: 31))
+        reject("transfer.bye.long", Data([7, 0]))
+        reject("transfer.unknownType", Data([99, 0, 0]))
+        reject("transfer.empty", Data())
+
+        // The bulk envelope, refused. Each is offered to a *fresh* opener,
+        // which expects counter 1.
+        let sealer = Bulk.Sealer(key: sealKey, lane: .hostToViewer)
+        _ = sealer.seal(Transfer.encode(.bye))                  // burns counter 1
+        reject("bulk.counterAhead", sealer.seal(Transfer.encode(.bye)))   // counter 2
+        let good = Bulk.Sealer(key: sealKey, lane: .hostToViewer).seal(Transfer.encode(.bye))
+        reject("bulk.tamperedTag", {
+            var b = [UInt8](good); b[b.count - 1] ^= 1; return Data(b)
+        }())
+        // The length is the associated data, so moving it breaks the tag on
+        // this frame rather than mis-framing the next one.
+        reject("bulk.tamperedLength", {
+            var b = [UInt8](good); b[3] = b[3] &+ 1; return Data(b)
+        }())
+        reject("bulk.wrongLane",
+               Bulk.Sealer(key: sealKey, lane: .viewerToHost).seal(Transfer.encode(.bye)))
+        reject("bulk.short", good.prefix(4 + Bulk.minBody - 1))
+
         reject("textFocused.notABoolean", Data([25, 2]))
         reject("textFocused.headerOnly", Data([25]))
         reject("textFocused.long", Data([25, 0, 0]))
@@ -511,6 +585,15 @@ enum PacketVectors {
             return decoder.feed(data) != nil
         }
         if name.hasPrefix("pairing.") { return true }
+        if name.hasPrefix("transfer.") { return Transfer.decode(data) != nil }
+        if name.hasPrefix("bulk.") {
+            // A fresh opener per vector, expecting counter 1, which is why
+            // every bulk ENCODE vector is sealed by a fresh sealer. The lane
+            // is the receiving one: a frame sealed on the other lane must not
+            // open, which is what bulk.wrongLane asserts.
+            let opener = Bulk.Opener(key: sealKey, lane: .hostToViewer)
+            return opener.open(data) != nil
+        }
         if name.hasPrefix("commit.") {
             guard data.count == 48 else { return false }
             return Pairing.opens(commitment: data.prefix(32),
@@ -533,6 +616,10 @@ enum PacketVectors {
     }
 
     static func reencode(_ name: String, _ data: Data) -> Data? {
+        if name.hasPrefix("transfer.") { return Transfer.decode(data).map(Transfer.encode) }
+        // Not round-tripped: sealing again would use counter 2 and produce
+        // different bytes by design. The tag already proves the bytes.
+        if name.hasPrefix("bulk.") { return nil }
         if name.hasPrefix("chunk.") { return ChunkHeader.decode(data).map(ChunkHeader.encode) }
         if name.hasPrefix("seal.") {
             guard let (h, body) = MediaSeal.open(data, key: sealKey, lane: 0) else { return nil }

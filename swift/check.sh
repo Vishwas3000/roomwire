@@ -22,6 +22,7 @@ swiftc $src/Packet.swift Checks/PacketCheck.swift -o "$out/packet"
 # a phone three months from now. If this fails and the change was deliberate,
 # commit the new protocol/vectors.txt *with* the Kotlin side.
 swiftc $src/Packet.swift $src/Chunk.swift $src/MediaSeal.swift $src/Pairing.swift \
+    $src/BulkSeal.swift $src/Transfer.swift \
     Checks/PacketVectors.swift -o "$out/vectors"
 "$out/vectors" > "$out/vectors.txt"
 if ! diff -u ../protocol/vectors.txt "$out/vectors.txt"; then

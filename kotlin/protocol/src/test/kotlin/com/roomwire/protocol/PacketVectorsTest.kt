@@ -31,7 +31,7 @@ class PacketVectorsTest {
         }
         // A short read must fail loudly rather than report a green suite over
         // half the format.
-        assertEquals(174, rows.size, "expected 174 vectors, parsed ${rows.size}")
+        assertEquals(204, rows.size, "expected 204 vectors, parsed ${rows.size}")
 
         return rows.map { (name, verdict, hex) ->
             DynamicTest.dynamicTest("$verdict $name") { check(name, verdict, unhex(hex)) }
@@ -70,6 +70,12 @@ class PacketVectorsTest {
         name.startsWith("seal.") -> MediaSeal.open(bytes, mediaKey, if (name == "seal.wrongLane") 1u else 0u) != null
         name.startsWith("frame.") -> Framing.Decoder().feed(bytes) != null
         name.startsWith("pairing.") -> true
+        name.startsWith("transfer.") -> Transfer.decode(bytes) != null
+        // A fresh opener per vector, expecting counter 1 — which is why every
+        // bulk ENCODE vector is sealed by a fresh sealer, so the vectors do not
+        // have to be replayed in order to mean anything.
+        name.startsWith("bulk.") ->
+            Bulk.Opener(mediaKey, Bulk.Lane.HOST_TO_VIEWER).open(bytes) != null
         name.startsWith("commit.") ->
             bytes.size == 48 && Pairing.opens(bytes.copyOfRange(0, 32), uuidFrom(bytes, 32))
         else -> Packet.decodeMessage(bytes) != null
@@ -83,6 +89,10 @@ class PacketVectorsTest {
         name.startsWith("frame.") -> Framing.Decoder().feed(bytes)
             ?.singleOrNull()?.let { Framing.encode(it) }
         name.startsWith("pairing.") || name.startsWith("commit.") -> null
+        name.startsWith("transfer.") -> Transfer.decode(bytes)?.let { Transfer.encode(it) }
+        // Not round-tripped: sealing again would use counter 2 and produce
+        // different bytes by design. The tag already proves the bytes.
+        name.startsWith("bulk.") -> null
         else -> when (val m = Packet.decodeMessage(bytes)) {
             null -> null
             is Packet.Message.Video -> m.frame.let {
@@ -271,6 +281,45 @@ class PacketVectorsTest {
         "textFocused.true" -> Packet.encodeTextFocused(true)
         "textFocused.false" -> Packet.encodeTextFocused(false)
 
+        // The transfer codec. The two length fields in an offer are the only
+        // thing separating a multi-byte name from an empty mime type, so those
+        // are the cases worth pinning.
+        "transfer.offer" -> Transfer.encode(
+            Transfer.Frame.Offered(
+                Transfer.Offer(
+                    7u, 0x0102_0304_0506_0708uL, 0x1122_3344_5566_7788uL,
+                    headHash, false, "holiday.jpg", "image/jpeg",
+                ),
+            ),
+        )
+        "transfer.offer.utf8" -> Transfer.encode(
+            Transfer.Frame.Offered(
+                Transfer.Offer(1u, 5uL, 0uL, headHash, false, "h\u00e9\uD83D\uDC4D.txt", ""),
+            ),
+        )
+        "transfer.offer.clipboard" -> Transfer.encode(
+            Transfer.Frame.Offered(
+                Transfer.Offer(2u, 11uL, 0uL, headHash, true, "clipboard", "text/plain"),
+            ),
+        )
+        "transfer.accept" -> Transfer.encode(Transfer.Frame.Accept(7u, 0xDEAD_BEEFuL))
+        "transfer.accept.zero" -> Transfer.encode(Transfer.Frame.Accept(7u, 0uL))
+        "transfer.reject" -> Transfer.encode(Transfer.Frame.Rejected(7u, Transfer.Reject.NO_SPACE))
+        "transfer.data" -> Transfer.encode(
+            Transfer.Frame.Data(7u, byteArrayOf(1, 2, 3, 4)),
+        )
+        "transfer.done" -> Transfer.encode(Transfer.Frame.Done(7u, wholeHash))
+        "transfer.cancel" -> Transfer.encode(
+            Transfer.Frame.Cancel(7u, Transfer.Reject.DECLINED),
+        )
+        "transfer.bye" -> Transfer.encode(Transfer.Frame.Bye)
+
+        // A fresh sealer each, so each is counter 1.
+        "bulk.bye" -> Bulk.Sealer(mediaKey, Bulk.Lane.HOST_TO_VIEWER)
+            .seal(Transfer.encode(Transfer.Frame.Bye))
+        "bulk.data" -> Bulk.Sealer(mediaKey, Bulk.Lane.HOST_TO_VIEWER)
+            .seal(Transfer.encode(Transfer.Frame.Data(3u, byteArrayOf(9, 8, 7))))
+
         // The token is a UUID in RFC 4122 byte order — the same bytes its
         // string form spells — so both sides can key a trust store by the string.
         "hello" -> Packet.encodeHello(commitment, 0xC001u, "Ada’s Pixel")
@@ -336,6 +385,10 @@ class PacketVectorsTest {
             return UUID(buf.long, buf.long)
         }
         val mediaKey = ByteArray(32) { it.toByte() }
+
+        /** The two hashes an offer carries, matching PacketVectors.swift. */
+        val headHash = ByteArray(32) { (0xA0 + it).toByte() }
+        val wholeHash = ByteArray(32) { (0xB0 + it).toByte() }
         val videoFields = ChunkHeader.Fields(ChunkHeader.Kind.VIDEO, 7uL, 0x01020304u, 2u.toUShort(), 150u.toUShort())
         val messageFields = ChunkHeader.Fields(ChunkHeader.Kind.MESSAGE, 8uL, 0u, 0u.toUShort(), 1u.toUShort())
         val pingFields = ChunkHeader.Fields(ChunkHeader.Kind.PING, 9uL, 0u, 0u.toUShort(), 1u.toUShort())
