@@ -63,9 +63,4 @@ enum TLS {
 
     /// UDP, peer-to-peer, no DTLS: the media lane carries its own envelope, so a
     /// second handshake here would buy nothing and cost a round trip.
-    static func udp() -> NWParameters {
-        let parameters = NWParameters(dtls: nil, udp: NWProtocolUDP.Options())
-        parameters.includePeerToPeer = true
-        return parameters
-    }
 }

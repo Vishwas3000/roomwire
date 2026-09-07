@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Network
+import RoomWireMedia
 import RoomWireProtocol
 
 /// The watching end: browses for hosts, joins one, and holds the session.

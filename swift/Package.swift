@@ -16,6 +16,7 @@ let package = Package(
     platforms: [.macOS("15.0"), .iOS("18.0")],
     products: [
         .library(name: "RoomWireProtocol", targets: ["RoomWireProtocol"]),
+        .library(name: "RoomWireMedia", targets: ["RoomWireMedia"]),
         .library(name: "RoomWireTransport", targets: ["RoomWireTransport"]),
         .executable(name: "roomwire-lab", targets: ["RoomWireLab"]),
     ],
@@ -29,10 +30,15 @@ let package = Package(
     ],
     targets: [
         .target(name: "RoomWireProtocol", path: "Sources/RoomWireProtocol"),
+        // The UDP media lane and its receiver: NWConnection + MediaSeal, no
+        // certificates. Kept apart from RoomWireTransport so an iOS build can
+        // link the receiver without pulling swift-certificates/BoringSSL.
+        .target(name: "RoomWireMedia", dependencies: ["RoomWireProtocol"], path: "Sources/RoomWireMedia"),
         .target(
             name: "RoomWireTransport",
             dependencies: [
                 "RoomWireProtocol",
+                "RoomWireMedia",
                 .product(name: "X509", package: "swift-certificates"),
             ],
             path: "Sources/RoomWireTransport"
