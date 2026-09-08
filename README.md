@@ -27,11 +27,14 @@ the two lanes — runs end to end. The Kotlin transport is next.
 | `ChunkHeader` / `Chunker` / `Parity` / `Reassembler` | `Chunk.swift` | `Chunk.kt` | Cutting a frame into datagrams of at most 1400 bytes and putting it back together — in order, never late, and with one lost slice rebuilt from the frame's parity; more than one is not delivered. |
 | `MediaSeal` | `MediaSeal.swift` | `MediaSeal.kt` | The media lane's envelope: ChaCha20-Poly1305, the header as associated data, the lane derived from which end you are, and the replay window consulted only after the tag verifies. |
 | `Pairing` / `Framing` | `Pairing.swift` | `Pairing.kt` | The six characters both screens show, and the length prefix that makes a TCP byte stream into messages again. |
-| `Host` / `Viewer` | `RoomWireTransport/` | *next* | Discovery over Bonjour, pairing over mutual TLS, and the two lanes. Platform code: this is the half that owns sockets. |
+| `Viewer` / `ViewerIdentity` | `RoomWireLink/` | `transport/` | The viewer's whole half, with no certificate library: discovery over Bonjour, TLS to the host, a certificate *or a bare P-256 key* for an identity, and both lanes. iOS links this. |
+| `Host` / `Identity` | `RoomWireTransport/` | — | The presenting end and the one thing that needs swift-certificates: minting a self-signed identity. macOS only. |
 
-The transport is a second product, `RoomWireTransport`, and it depends on the
-first. `RoomWireProtocol` has no dependency of its own and is not allowed one —
-that is what keeps every check above runnable in a second on a laptop.
+Three products. `RoomWireProtocol` has no dependency of its own and is not
+allowed one — that is what keeps every check above runnable in a second on a
+laptop. `RoomWireLink` adds sockets but no certificate library, so an iPhone
+can link a complete viewer without BoringSSL. `RoomWireTransport` adds the host
+and swift-certificates, for minting; only the Mac links it.
 
 ## The lab tool
 
