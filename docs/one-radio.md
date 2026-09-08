@@ -226,14 +226,24 @@ asks for `.peerToPeer`; it exists for a future "no Wi-Fi in the room" mode.
 
 ## 8. How the app uses it
 
-**iPhone / iPad (`Session.swift`).** `startBrowsing()` now starts a
+**iPhone / iPad (`Session.swift`).** The capability is in; the policy is
+deliberately conservative. `startBrowsing()` still starts MultipeerConnectivity
+first, because AWDL is the iPhone's *fastest* link when it is the only viewer
+(7–38 ms measured) and nothing here may make an all-Apple room slower. A
 `RoomWireLink.Viewer` with a `.key` identity (from `SigningKey.load`, stored per
-install) first. MultipeerConnectivity browsing starts **only** if RoomWire finds
-nothing for ~4 seconds — a Mac on another network, or one running a build from
-before this. Because MC browsing is itself what wakes AWDL, it is never started
-on speculation, and it is stopped again the moment a Mac appears over Wi-Fi.
-RoomWire hosts and MC hosts merge into one `hosts` list, de-duplicated by name
-so the same Mac is never shown twice.
+install) starts only if MC finds no Mac within ~4 seconds. RoomWire and MC hosts
+merge into one `hosts` list, de-duplicated by name.
+
+**What is not built yet, and matters most:** the switch that moves the iPhone
+to Wi-Fi *because an Android is in the room*. That is the case this whole
+change exists for, and it is a trade — the iPhone gives up some latency so the
+Android becomes usable — so it must be made only when an Android is actually
+present. The host is the only end that knows that. The design: a host→viewer
+message ("an Android is here; join me over `_roomwirek._tcp`"), carried over
+the live MC session; the iPhone joins RoomWire and leaves MC once connected;
+the host pre-approves the phone's key fingerprint, vouched for by the MC
+session that is already trusted, so the switch raises no second approval
+prompt. Until that lands, a mixed room behaves as it did before this change.
 
 `WatchView` gained the one screen MultipeerConnectivity never needed: the
 six-character pairing code, shown large while the presenter decides, and a plain
@@ -277,9 +287,11 @@ Everything above is verified at the build-and-socket level on one machine.
 - That an iPhone on ordinary Wi-Fi, with AWDL never activated, actually holds
   the Android at hotspot class in the same room. The mechanism says it must —
   no AWDL, no time-sharing — but the flight recorder has not seen it yet.
-- The iPhone's own numbers as a Wi-Fi viewer. It moves from a private AWDL link
-  to a shared one, and inherits whatever the access point's jitter is. It must
-  be benched, not assumed good.
+- **The iPhone's own cost.** Wi-Fi is slower for the iPhone than AWDL: a
+  shared link through the access point instead of a private direct one. This
+  is the price of the trade, not a side effect, and it is why the switch must
+  be conditional on an Android being present. The exact number is unmeasured;
+  expect tens of milliseconds more than AWDL's 7–38 ms, set by the AP.
 - The product topology (phone's 5 GHz hotspot with the phone's Wi-Fi STA off, or
   everyone on the office AP) and its fallbacks.
 
