@@ -8,3 +8,5 @@ kotlin/**/build/
 kotlin/local.properties
 kotlin/.kotlin/
 .DS_Store
+# Kotlin compiler output from an IDE build; gradle uses build/.
+kotlin/protocol/bin/
