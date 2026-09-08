@@ -1,5 +1,6 @@
 import Foundation
 import RoomWireProtocol
+import RoomWireLink
 import RoomWireTransport
 
 /// The transport, end to end, in one process: two identities that have never
@@ -108,6 +109,24 @@ enum Selftest {
         try expect(peers.get().count == 2, "a refused viewer reached the connected set")
         c.viewer.leave()
 
+        // D: no certificate, a bare key — the iPhone's shape. The host must
+        // pin the key's fingerprint, both screens must still agree on the
+        // code, and a refused signature must never reach approval, which the
+        // impostor below checks by signing with a key it did not announce.
+        let keyD = SigningKey.ephemeral()
+        let d = Joiner(key: keyD)
+        d.viewer.startBrowsing()
+        try until("D to find the host") { d.viewer.hosts.contains { $0.name == "selftest-host" } }
+        d.viewer.join(d.viewer.hosts.first { $0.name == "selftest-host" }!, token: UUID(), name: "Viewer D")
+        try until("D to reach awaitingApproval") { d.code() != nil }
+        try until("an invite for D") { invites.get().count == 4 }
+        let inviteD = invites.get()[3]
+        try expect(inviteD.code == d.code(), "D's two ends showed different codes")
+        try expect(inviteD.peer.fingerprint == keyD.fingerprint, "the host pinned something other than D's key")
+        inviteD.respond(true)
+        try until("D to connect") { d.isConnected() }
+        try until("the host to report three peers") { peers.get().count == 3 }
+
         // Fan-out: one 200 KB frame, sliced once, sealed twice, byte-identical
         // at both ends.
         let frame = Data([1] + (0 ..< 200_000).map { _ in UInt8.random(in: 0 ... 255) })
@@ -116,6 +135,7 @@ enum Selftest {
         host.send(frame, to: peers.get(), mode: .unreliable)
         try until("A to receive the frame") { a.received.get().contains(frame) }
         try until("B to receive the frame") { b.received.get().contains(frame) }
+        try until("D to receive the frame") { d.received.get().contains(frame) }
 
         // Small messages, both lanes, arriving whole.
         let cursor = Packet.encodeCursor(seq: 7, sentMs: 1234, x: 0.25, y: 0.75)
@@ -148,12 +168,23 @@ enum Selftest {
         // certificate, so nobody is asked again.
         let before = invites.get().count
         a.viewer.leave()
-        try until("the host to drop A") { peers.get().count == 1 }
+        try until("the host to drop A") { peers.get().count == 2 }
         a.viewer.startBrowsing()
         try until("A to find the host again") { a.viewer.hosts.contains { $0.name == "selftest-host" } }
         a.viewer.join(a.viewer.hosts.first { $0.name == "selftest-host" }!, token: tokenA, name: "Viewer A")
         try until("A to reconnect without being asked about", 5) { a.isConnected() }
         try expect(invites.get().count == before, "a remembered viewer raised another invite")
+
+        // D likewise, on a fresh token: remembered by the fingerprint of its
+        // key, which is the whole point of the key standing where a
+        // certificate stands.
+        d.viewer.leave()
+        try until("the host to drop D") { peers.get().count == 2 }
+        d.viewer.startBrowsing()
+        try until("D to find the host again") { d.viewer.hosts.contains { $0.name == "selftest-host" } }
+        d.viewer.join(d.viewer.hosts.first { $0.name == "selftest-host" }!, token: UUID(), name: "Viewer D")
+        try until("D to reconnect without being asked about", 5) { d.isConnected() }
+        try expect(invites.get().count == before, "a remembered key viewer raised another invite")
 
         // Stopping takes everything with it, including the in-flight entries.
         host.stop()
@@ -161,6 +192,7 @@ enum Selftest {
         try expect(host.inFlight(to: peerA) == 0, "a stopped host still reports in-flight datagrams")
         a.viewer.leave()
         b.viewer.leave()
+        d.viewer.leave()
     }
 
     /// Approves on first sight and remembers by fingerprint, which is what an
@@ -187,7 +219,17 @@ enum Selftest {
         private let states = Locked<[Viewer.State]>([])
 
         init(label: String, keychain: SecKeychain?) throws {
-            viewer = Viewer(identity: try Identity.load(label: label, keychain: keychain))
+            viewer = Viewer(identity: try Identity.load(label: label, keychain: keychain).viewer)
+            wire()
+        }
+
+        /// A viewer with no certificate at all — what an iPhone is.
+        init(key: SigningKey) {
+            viewer = Viewer(identity: .key(key))
+            wire()
+        }
+
+        private func wire() {
             viewer.onState = { [states] state in states.mutate { $0.append(state) } }
             viewer.onPacket = { [received] data in received.mutate { $0.append(data) } }
         }

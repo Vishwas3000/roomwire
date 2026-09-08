@@ -1,13 +1,15 @@
 import CryptoKit
 import Foundation
 import Network
+import RoomWireLink
 import RoomWireProtocol
 
 /// The presenting end: advertises over Bonjour, admits viewers, and sends to
 /// them.
 ///
-/// One `NWListener` for the control lane, and one outbound UDP flow per admitted
-/// viewer for the media lane. The host never listens on UDP — it dials the port
+/// Two `NWListener`s for the control lane — one per kind of viewer identity,
+/// see `Bonjour.keyType` — and one outbound UDP flow per admitted viewer for the
+/// media lane. The host never listens on UDP — it dials the port
 /// the viewer named in its `hello` — so there is no session id on the wire,
 /// no demultiplexing to write, and a per-viewer send queue for free.
 ///
@@ -54,9 +56,11 @@ public final class Host: @unchecked Sendable {
     private let name: String
     private let identity: Identity
     private let trust: any TrustStore
+    private let reach: Reach
     private let queue = DispatchQueue(label: "roomwire.host")
     private let lock = NSLock()
     private var listener: NWListener?
+    private var keyListener: NWListener?
     private var sessions: [UUID: Session] = [:]
     /// At most one viewer may be waiting on the presenter at a time, and only
     /// so many may ask per minute. Per-source-IP limiting was the obvious shape
@@ -81,19 +85,32 @@ public final class Host: @unchecked Sendable {
             .replacingOccurrences(of: ".local", with: ""))
     }
 
-    public init(name: String, identity: Identity, trust: any TrustStore) {
+    /// `reach` defaults to the network everyone is already on; see `Reach`
+    /// for why asking for peer-to-peer costs every other viewer in the room.
+    public init(name: String, identity: Identity, trust: any TrustStore, reach: Reach = .infrastructure) {
         self.name = Packet.clampName(name)
         self.identity = identity
         self.trust = trust
+        self.reach = reach
     }
 
     public func start() throws {
-        let parameters = TLS.parameters(identity: identity, requirePeer: true, queue: queue)
-        let listener = try NWListener(using: parameters)
-        listener.service = NWListener.Service(name: name, type: Bonjour.type,
-                                              txtRecord: NWTXTRecord(["v": "\(Bonjour.version)",
-                                                                      "name": name]))
-        listener.newConnectionHandler = { [weak self] connection in self?.adopt(connection) }
+        let txt = NWTXTRecord(["v": "\(Bonjour.version)", "name": name])
+        // Certificate viewers: mutual TLS, refused without a client certificate.
+        let listener = try NWListener(using: TLS.parameters(identity: identity.secIdentity, requirePeer: true,
+                                                            reach: reach, queue: queue))
+        listener.service = NWListener.Service(name: name, type: Bonjour.type, txtRecord: txt)
+        // Key viewers: the host's certificate only; the viewer proves a key.
+        let keyListener = try NWListener(using: TLS.parameters(identity: identity.secIdentity, requirePeer: false,
+                                                               reach: reach, queue: queue))
+        keyListener.service = NWListener.Service(name: name, type: Bonjour.keyType, txtRecord: txt)
+        for each in [listener, keyListener] {
+            each.newConnectionHandler = { [weak self] connection in self?.adopt(connection) }
+        }
+        // `listening` follows the certificate listener: it is the one every
+        // viewer that exists today needs, and the one whose failure means
+        // nobody is coming. The key listener failing alone is reported the
+        // same way and costs only the viewers that would have used it.
         listener.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
@@ -108,13 +125,20 @@ public final class Host: @unchecked Sendable {
                 break
             }
         }
+        keyListener.stateUpdateHandler = { [weak self] state in
+            if case .failed(let error) = state { self?.onFailed?(error) }
+        }
         listener.start(queue: queue)
+        keyListener.start(queue: queue)
         self.listener = listener
+        self.keyListener = keyListener
     }
 
     public func stop() {
         listener?.cancel()
         listener = nil
+        keyListener?.cancel()
+        keyListener = nil
         lock.lock()
         let open = Array(sessions.values)
         sessions = [:]
@@ -194,7 +218,11 @@ public final class Host: @unchecked Sendable {
         let control: ControlLane
         var media: OutboundMedia?
         var state: Stage = .handshaking
+        /// Empty until known: from TLS for a certificate viewer, and only
+        /// after `revealSigned` verifies for a key viewer.
         var fingerprint = Data()
+        /// Set by `helloKey`, and what marks a session as the key handshake.
+        var publicKey: P256.Signing.PublicKey?
         var commitment = Data()
         var token = UUID()
         var displayName = "?"
@@ -223,7 +251,9 @@ public final class Host: @unchecked Sendable {
 
         control.onReady = { [weak self, weak session] fingerprint in
             guard let self, let session else { return }
-            session.fingerprint = fingerprint
+            // nil is a viewer with no certificate; it has until `revealSigned`
+            // to prove a key, and its fingerprint stays empty until then.
+            session.fingerprint = fingerprint ?? Data()
             session.state = .awaitingHello
             // A connection that says nothing is a connection holding a slot.
             queue.asyncAfter(deadline: .now() + 5) { [weak session] in
@@ -244,7 +274,11 @@ public final class Host: @unchecked Sendable {
 
     private func handle(_ message: Data, on session: Session) {
         switch Packet.decodeMessage(message) {
-        case .hello(let commitment, let port, let name) where session.state == .awaitingHello:
+        // Which hello a viewer may speak was settled by TLS: one that presented
+        // a certificate says `hello`, one that did not says `helloKey`. Either
+        // the other way round is a viewer contradicting its own handshake.
+        case .hello(let commitment, let port, let name)
+            where session.state == .awaitingHello && !session.fingerprint.isEmpty:
             session.commitment = commitment
             session.viewerPort = port
             session.displayName = name
@@ -253,13 +287,46 @@ public final class Host: @unchecked Sendable {
             // the viewer can show the code while the presenter is deciding.
             session.control.send(Packet.encodeHostNonce(session.hostNonce))
 
-        case .reveal(let token) where session.state == .awaitingReveal:
+        case .helloKey(let publicKey, let commitment, let port, let name)
+            where session.state == .awaitingHello && session.fingerprint.isEmpty:
+            // The decoder checked the shape; only CryptoKit can say whether the
+            // point is on the curve. Nothing is believed about the key yet —
+            // it is held until the signature that proves it is held too.
+            guard let key = try? P256.Signing.PublicKey(x963Representation: publicKey) else {
+                return drop(session)
+            }
+            session.publicKey = key
+            session.commitment = commitment
+            session.viewerPort = port
+            session.displayName = name
+            session.state = .awaitingReveal
+            session.control.send(Packet.encodeHostNonce(session.hostNonce))
+
+        case .reveal(let token) where session.state == .awaitingReveal && session.publicKey == nil:
             // A viewer that cannot produce the preimage of its own commitment
             // is either broken or steering the code, and the two look the same
             // from here.
             guard Pairing.opens(commitment: session.commitment, token: token) else {
                 return drop(session)
             }
+            session.token = token
+            session.state = .deciding
+            decide(session)
+
+        case .revealSigned(let token, let raw) where session.state == .awaitingReveal:
+            // The same commitment check, and then the proof a certificate viewer
+            // gave inside TLS: a signature over this host's nonce, this host's
+            // fingerprint and the token, by the key `helloKey` named. Only now
+            // does that key's fingerprint become this viewer's identity.
+            guard let key = session.publicKey,
+                  Pairing.opens(commitment: session.commitment, token: token),
+                  let signature = try? P256.Signing.ECDSASignature(rawRepresentation: raw),
+                  key.isValidSignature(signature, for: Pairing.proof(hostNonce: session.hostNonce,
+                                                                     hostFingerprint: identity.fingerprint,
+                                                                     token: token)) else {
+                return drop(session)
+            }
+            session.fingerprint = Data(SHA256.hash(data: key.x963Representation))
             session.token = token
             session.state = .deciding
             decide(session)
@@ -332,7 +399,7 @@ public final class Host: @unchecked Sendable {
               let port = NWEndpoint.Port(rawValue: session.viewerPort) else { return drop(session) }
         session.state = .admitted
         let key = SymmetricKey(size: .bits256)
-        let media = OutboundMedia(to: host, port: port, key: key, queue: queue)
+        let media = OutboundMedia(to: host, port: port, key: key, queue: queue, reach: reach)
         session.media = media
 
         media.onReady = { [weak self, weak session] localPort in

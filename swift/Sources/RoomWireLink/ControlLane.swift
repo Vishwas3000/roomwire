@@ -8,40 +8,39 @@ import RoomWireProtocol
 /// framing decoder needs no lock. A framing violation — a zero length, or one
 /// past 8 MiB — closes the connection rather than being skipped: a peer that is
 /// not speaking this protocol is not one to resynchronise with.
-final class ControlLane {
+public final class ControlLane {
     /// A whole message, byte 0 first. On `queue`.
-    var onMessage: ((Data) -> Void)?
-    /// The handshake finished and the peer's fingerprint is known.
-    var onReady: ((Data) -> Void)?
+    public var onMessage: ((Data) -> Void)?
+    /// The handshake finished. The peer's certificate fingerprint, or nil when
+    /// it presented no certificate — which is for the caller to judge: a host
+    /// without one is refused, a viewer without one proves a key instead.
+    public var onReady: ((Data?) -> Void)?
     /// Closed, for any reason, exactly once.
-    var onClosed: (() -> Void)?
+    public var onClosed: (() -> Void)?
 
     private let connection: NWConnection
     private let queue: DispatchQueue
     private var decoder = Framing.Decoder()
     private var closed = false
 
-    init(connection: NWConnection, queue: DispatchQueue) {
+    public init(connection: NWConnection, queue: DispatchQueue) {
         self.connection = connection
         self.queue = queue
     }
 
     /// The address the peer is at, which is where the host dials the media lane.
-    var remoteHost: NWEndpoint.Host? {
+    public var remoteHost: NWEndpoint.Host? {
         if case .hostPort(let host, _) = connection.currentPath?.remoteEndpoint { return host }
         if case .hostPort(let host, _) = connection.endpoint { return host }
         return nil
     }
 
-    func start() {
+    public func start() {
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
             case .ready:
-                // A peer with no certificate is one nothing above can decide
-                // anything about, so it does not get a connection.
-                guard let fingerprint = TLS.peerFingerprint(of: connection) else { return close() }
-                onReady?(fingerprint)
+                onReady?(TLS.peerFingerprint(of: connection))
             case .failed, .cancelled:
                 fire()
             default:
@@ -52,12 +51,12 @@ final class ControlLane {
         receive()
     }
 
-    func send(_ message: Data) {
+    public func send(_ message: Data) {
         guard !closed else { return }
         connection.send(content: Framing.encode(message), completion: .idempotent)
     }
 
-    func close() {
+    public func close() {
         connection.cancel()
         fire()
     }

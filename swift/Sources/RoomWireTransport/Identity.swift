@@ -1,6 +1,7 @@
 import Crypto
 import Foundation
 import Network
+import RoomWireLink
 import Security
 import SwiftASN1
 import X509
@@ -28,6 +29,11 @@ public struct Identity: @unchecked Sendable {
     let secIdentity: sec_identity_t
     /// The DER, for the rare caller that wants to show a fingerprint's source.
     public let certificateDER: Data
+
+    /// This identity as a viewer presents it: the certificate, with TLS
+    /// proving possession. The other kind of `ViewerIdentity` is a bare key,
+    /// for a platform that cannot mint one of these.
+    public var viewer: ViewerIdentity { .certificate(secIdentity, fingerprint: fingerprint) }
 
     public enum Failure: Error, CustomStringConvertible {
         case keychain(OSStatus, String)
@@ -254,10 +260,4 @@ public struct Identity: @unchecked Sendable {
                            kSecUseDataProtectionKeychain: false] as CFDictionary)
         }
     }
-}
-
-/// Hex, lowercase — how a fingerprint is shown to a person and stored in
-/// `UserDefaults`.
-public extension Data {
-    var hexString: String { map { String(format: "%02x", $0) }.joined() }
 }

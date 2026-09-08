@@ -319,6 +319,29 @@ public enum Packet {
         /// The token `hello` committed to. The host hashes it, checks it
         /// against the commitment, and closes on a mismatch.
         case reveal(token: UUID)                                        // viewer -> host
+        /// `hello` for a viewer with no certificate to be identified by: the
+        /// iPhone, which links no certificate library and so cannot mint one.
+        /// Everything `hello` carries, plus the viewer's P-256 public key in
+        /// X9.63 uncompressed form — 65 bytes, `0x04` first. What identifies
+        /// this viewer is then SHA-256 of those 65 bytes, standing exactly
+        /// where SHA-256 of a certificate stands for everyone else. The proof
+        /// that the key is actually held comes one message later, in
+        /// `revealSigned`, and nothing is believed about the key before it.
+        ///
+        /// Additive id. A host without this case drops the connection at the
+        /// hello — which is what an older host does to a viewer it cannot
+        /// identify in any case, since it demanded a client certificate.
+        case helloKey(publicKey: Data, commitment: Data, udpPort: UInt16, name: String) // viewer -> host
+        /// `reveal` for a `helloKey` viewer: the token, and a P-256 ECDSA
+        /// signature — 64 bytes, r ‖ s — over `Pairing.proof`, which is
+        /// `hostNonce ‖ hostFingerprint ‖ token`. The nonce is the host's and
+        /// fresh per connection, so a captured signature replays to nobody;
+        /// the host's fingerprint is in it, so a signature made for one Mac is
+        /// not one for another; the token is what `helloKey` committed to. A
+        /// client certificate proves possession of its key inside the TLS
+        /// handshake. This proves the same thing, one message later, and the
+        /// host checks it before it lets the fingerprint mean anything.
+        case revealSigned(token: UUID, signature: Data)                 // viewer -> host
     }
 
     /// The most a display name may occupy on the wire, in UTF-8 bytes.
@@ -339,7 +362,7 @@ public enum Packet {
     /// is deliberately *not* a licence to ignore a malformed known message:
     /// those still close the connection, because a peer that cannot encode
     /// what it claims to be sending is not one to keep guessing at.
-    public static let highestKnownId: UInt8 = 29
+    public static let highestKnownId: UInt8 = 31
 
     public static func decodeMessage(_ data: Data) -> Message? {
         switch data.first {
@@ -496,6 +519,22 @@ public enum Packet {
             // build a desktop out of these two numbers.
             guard width > 0, height > 0 else { return nil }
             return .screen(width: width, height: height)
+        case 30:
+            let b = [UInt8](data)
+            // id, 65 bytes of key, 32 of commitment, 2 of port, 1 of length,
+            // then 1…63 of name: the same rules as `hello`, one field earlier.
+            // `0x04` is the X9.63 uncompressed marker; a compressed key is a
+            // shape this protocol does not speak, and is refused as one.
+            guard b.count >= 102, b[1] == 0x04, (1 ... maxNameBytes).contains(Int(b[100])),
+                  b.count == 101 + Int(b[100]) else { return nil }
+            let port = be16(b, 98)
+            guard port != 0, let name = String(validating: b[101...], as: UTF8.self) else { return nil }
+            return .helloKey(publicKey: Data(b[1 ..< 66]), commitment: Data(b[66 ..< 98]),
+                             udpPort: port, name: name)
+        case 31:
+            let b = [UInt8](data)
+            guard b.count == 81 else { return nil }
+            return .revealSigned(token: uuid(b, 1), signature: Data(b[17 ..< 81]))
         case 21:
             let b = [UInt8](data)
             guard b.count == 17 else { return nil }
@@ -533,6 +572,32 @@ public enum Packet {
     public static func encodeReveal(token: UUID) -> Data {
         var out = Data([22])
         out.append(contentsOf: withUnsafeBytes(of: token.uuid) { [UInt8]($0) })
+        return out
+    }
+
+    /// `publicKey` is 65 bytes of X9.63 — `P256.Signing.PublicKey.x963Representation`
+    /// — and `commitment` is 32. Both are the caller's own values, so both trap
+    /// rather than refuse; refusing is for bytes off the network.
+    public static func encodeHelloKey(publicKey: Data, commitment: Data, udpPort: UInt16, name: String) -> Data {
+        precondition(publicKey.count == 65 && publicKey.first == 0x04,
+                     "a P-256 public key in X9.63 form is 65 bytes and starts 0x04")
+        precondition(commitment.count == 32, "a commitment is SHA-256, which is 32 bytes")
+        var out = Data([30])
+        out += publicKey
+        out += commitment
+        out.appendBE16(udpPort)
+        let name = nameBytes(name)
+        out.append(UInt8(name.count))
+        out.append(contentsOf: name)
+        return out
+    }
+
+    /// `signature` is the raw 64-byte form, r ‖ s — `ECDSASignature.rawRepresentation`.
+    public static func encodeRevealSigned(token: UUID, signature: Data) -> Data {
+        precondition(signature.count == 64, "a raw P-256 ECDSA signature is r ‖ s, 64 bytes")
+        var out = Data([31])
+        out.append(contentsOf: withUnsafeBytes(of: token.uuid) { [UInt8]($0) })
+        out += signature
         return out
     }
 

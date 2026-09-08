@@ -4,11 +4,13 @@ import PackageDescription
 // RoomWire: the wire format and the decisions made about it, and the transport
 // that carries it.
 //
-// Two products, and the split between them is the point. `RoomWireProtocol` has
-// no platform inside and no dependency outside: plain value types whose only
-// clock is a `TimeInterval` the caller passes in, which is what lets every
+// Three products, and the splits between them are the point. `RoomWireProtocol`
+// has no platform inside and no dependency outside: plain value types whose
+// only clock is a `TimeInterval` the caller passes in, which is what lets every
 // check run in about a second with no device and no second machine.
-// `RoomWireTransport` is where the sockets, the keychain and the radio live.
+// `RoomWireLink` is the sockets, without a certificate library: the viewer's
+// whole half, linkable on iOS. `RoomWireTransport` adds the host and the one
+// thing that needs swift-certificates — minting a self-signed identity.
 //
 // Swift 5 language mode on purpose: the consuming app builds in it.
 let package = Package(
@@ -16,7 +18,7 @@ let package = Package(
     platforms: [.macOS("15.0"), .iOS("18.0")],
     products: [
         .library(name: "RoomWireProtocol", targets: ["RoomWireProtocol"]),
-        .library(name: "RoomWireMedia", targets: ["RoomWireMedia"]),
+        .library(name: "RoomWireLink", targets: ["RoomWireLink"]),
         .library(name: "RoomWireTransport", targets: ["RoomWireTransport"]),
         .executable(name: "roomwire-lab", targets: ["RoomWireLab"]),
     ],
@@ -30,15 +32,18 @@ let package = Package(
     ],
     targets: [
         .target(name: "RoomWireProtocol", path: "Sources/RoomWireProtocol"),
-        // The UDP media lane and its receiver: NWConnection + MediaSeal, no
-        // certificates. Kept apart from RoomWireTransport so an iOS build can
-        // link the receiver without pulling swift-certificates/BoringSSL.
-        .target(name: "RoomWireMedia", dependencies: ["RoomWireProtocol"], path: "Sources/RoomWireMedia"),
+        // Everything both ends share that needs no certificate library: the
+        // control lane's TLS parameters and framing, the UDP media receiver,
+        // the viewer, and a viewer identity that can be a bare P-256 key.
+        // Kept apart from RoomWireTransport so an iOS build links a whole
+        // viewer without pulling swift-certificates/BoringSSL — verified by
+        // `nm` on the iOS binary, and the reason the iPhone can leave AWDL.
+        .target(name: "RoomWireLink", dependencies: ["RoomWireProtocol"], path: "Sources/RoomWireLink"),
         .target(
             name: "RoomWireTransport",
             dependencies: [
                 "RoomWireProtocol",
-                "RoomWireMedia",
+                "RoomWireLink",
                 .product(name: "X509", package: "swift-certificates"),
             ],
             path: "Sources/RoomWireTransport"

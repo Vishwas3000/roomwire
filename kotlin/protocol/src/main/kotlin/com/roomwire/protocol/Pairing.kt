@@ -67,6 +67,16 @@ object Pairing {
     private const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 
     /** RFC 4648 without padding: five bits at a time, high bits first. */
+    /**
+     * What a HelloKey viewer signs in RevealSigned: hostNonce ‖ hostFingerprint
+     * ‖ token, 64 bytes. The nonce is fresh per connection, the host's
+     * fingerprint binds the proof to one Mac, the token to one commitment.
+     */
+    fun proof(hostNonce: ByteArray, hostFingerprint: ByteArray, token: UUID): ByteArray {
+        require(hostNonce.size == 16 && hostFingerprint.size == 32) { "a proof is 16 ‖ 32 ‖ 16 bytes" }
+        return hostNonce + hostFingerprint + uuidBytes(token)
+    }
+
     internal fun base32(bytes: ByteArray): String {
         val out = StringBuilder()
         var acc = 0

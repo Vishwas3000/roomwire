@@ -467,6 +467,27 @@ object Packet {
          * checks it against the commitment, and closes on a mismatch.
          */
         data class Reveal(val token: UUID) : Message
+
+        /**
+         * viewer -> host. [Hello] for a viewer with no certificate to be
+         * identified by: the same fields, plus its P-256 public key in X9.63
+         * uncompressed form (65 bytes, 0x04 first). Its fingerprint is SHA-256
+         * of those bytes; possession is proved in [RevealSigned]. Android never
+         * sends this — it has a Keystore certificate — but the port reads it,
+         * because the vectors hold both implementations to the same bytes.
+         */
+        data class HelloKey(
+            val publicKey: ByteArray,
+            val commitment: ByteArray,
+            val udpPort: UShort,
+            val name: String,
+        ) : Message
+
+        /**
+         * viewer -> host. [Reveal] for a [HelloKey] viewer: the token, and a raw
+         * 64-byte ECDSA signature (r ‖ s) over [Pairing.proof].
+         */
+        data class RevealSigned(val token: UUID, val signature: ByteArray) : Message
     }
 
     /** The most a display name may occupy on the wire, in UTF-8 bytes. */
@@ -492,7 +513,7 @@ object Packet {
      * than fatal. Not a licence to ignore a malformed *known* message: those
      * still close the connection.
      */
-    const val HIGHEST_KNOWN_ID: Int = 29
+    const val HIGHEST_KNOWN_ID: Int = 31
 
     fun decodeMessage(b: ByteArray): Message? {
         when (b.firstOrNull()?.toUByte()?.toInt()) {
@@ -660,6 +681,23 @@ object Packet {
                 if (width == 0u.toUShort() || height == 0u.toUShort()) return null
                 return Message.Screen(width, height)
             }
+            30 -> {
+                // id, 65 bytes of key, 32 of commitment, 2 of port, 1 of
+                // length, then 1…63 of name: hello's rules, one field along.
+                // 0x04 is the X9.63 uncompressed marker; a compressed key is a
+                // shape this protocol does not speak, and is refused as one.
+                if (b.size < 102 || b.u(1).toInt() != 0x04) return null
+                val nameLen = b.u(100).toInt()
+                if (nameLen !in 1..MAX_NAME_BYTES || b.size != 101 + nameLen) return null
+                val port = b.be16(98)
+                if (port == 0u.toUShort()) return null
+                val name = strictUtf8(b, 101, b.size) ?: return null
+                return Message.HelloKey(b.copyOfRange(1, 66), b.copyOfRange(66, 98), port, name)
+            }
+            31 -> {
+                if (b.size != 81) return null
+                return Message.RevealSigned(uuidAt(b, 1), b.copyOfRange(17, 81))
+            }
             22 -> {
                 if (b.size != 17) return null
                 return Message.Reveal(uuidAt(b, 1))
@@ -692,6 +730,28 @@ object Packet {
     }
 
     fun encodeReveal(token: UUID): ByteArray = byteArrayOf(22) + uuidBytes(token)
+
+    /** [publicKey] is 65 bytes of X9.63 and [commitment] is 32; both are the caller's, so both throw. */
+    fun encodeHelloKey(publicKey: ByteArray, commitment: ByteArray, udpPort: UShort, name: String): ByteArray {
+        require(publicKey.size == 65 && publicKey[0] == 0x04.toByte()) {
+            "a P-256 public key in X9.63 form is 65 bytes and starts 0x04"
+        }
+        require(commitment.size == 32) { "a commitment is SHA-256, which is 32 bytes" }
+        val out = mutableListOf<Byte>(30)
+        out.addAll(publicKey.asList())
+        out.addAll(commitment.asList())
+        out.appendBE16(udpPort)
+        val bytes = nameBytes(name)
+        out.add(bytes.size.toByte())
+        out.addAll(bytes.asList())
+        return out.toByteArray()
+    }
+
+    /** [signature] is the raw 64-byte form, r ‖ s. */
+    fun encodeRevealSigned(token: UUID, signature: ByteArray): ByteArray {
+        require(signature.size == 64) { "a raw P-256 ECDSA signature is r ‖ s, 64 bytes" }
+        return byteArrayOf(31) + uuidBytes(token) + signature
+    }
 
     /** [mediaKey] and [hostFingerprint] are 32 bytes each; anything else is a programming error. */
     fun encodeWelcome(udpPort: UShort, mediaKey: ByteArray, hostFingerprint: ByteArray): ByteArray {

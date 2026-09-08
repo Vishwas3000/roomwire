@@ -1,4 +1,5 @@
 import Foundation
+import RoomWireLink
 import RoomWireTransport
 
 /// A trust store in a JSON file, for the lab tool. The app has its own — this

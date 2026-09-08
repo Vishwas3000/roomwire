@@ -59,6 +59,19 @@ public enum Pairing {
         commitment.count == 32 && commitment == self.commitment(for: token)
     }
 
+    /// What a `helloKey` viewer signs in `revealSigned`: the host's nonce,
+    /// the host's fingerprint, the token — 16 ‖ 32 ‖ 16, 64 bytes. Each part
+    /// closes one door: the nonce is fresh per connection, so a captured
+    /// signature is worthless a moment later; the host's fingerprint means a
+    /// signature made for one Mac says nothing to another; the token ties
+    /// the proof to the commitment that opened this very handshake.
+    public static func proof(hostNonce: Data, hostFingerprint: Data, token: UUID) -> Data {
+        precondition(hostNonce.count == 16 && hostFingerprint.count == 32, "a proof is 16 ‖ 32 ‖ 16 bytes")
+        var input = hostNonce + hostFingerprint
+        input.append(contentsOf: withUnsafeBytes(of: token.uuid) { [UInt8]($0) })
+        return input
+    }
+
     static let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
 
     /// RFC 4648 without padding: five bits at a time, high bits first.

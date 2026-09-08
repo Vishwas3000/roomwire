@@ -1,5 +1,6 @@
 import Foundation
 import RoomWireProtocol
+import RoomWireLink
 import RoomWireTransport
 
 // The lab tool: a real host and a real viewer, driven from a terminal.
@@ -109,8 +110,10 @@ case "view":
         print("could not load an identity: \(error)")
         exit(1)
     }
-    let viewer = Viewer(identity: identity)
-    print("viewer \"\(Packet.clampName(display))\"  fingerprint \(identity.fingerprint.hexString)")
+    // --key joins as an iPhone does: no certificate, a bare P-256 key.
+    let who: ViewerIdentity = flag("key") ? .key(.ephemeral()) : identity.viewer
+    let viewer = Viewer(identity: who)
+    print("viewer \"\(Packet.clampName(display))\"  fingerprint \(who.fingerprint.hexString)\(flag("key") ? "  (bare key)" : "")")
 
     let joined = NSLock()
     var attempted = false

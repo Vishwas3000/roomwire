@@ -1,7 +1,6 @@
 import CryptoKit
 import Foundation
 import Network
-import RoomWireMedia
 import RoomWireProtocol
 
 /// The watching end: browses for hosts, joins one, and holds the session.
@@ -44,7 +43,8 @@ public final class Viewer: @unchecked Sendable {
     /// secret — anyone can read it, and knowing it grants nothing.
     static let knownHostsKey = "com.roomwire.knownHosts"
 
-    private let identity: Identity
+    private let identity: ViewerIdentity
+    private let reach: Reach
     private let queue = DispatchQueue(label: "roomwire.viewer")
     private let lock = NSLock()
     private var browser: NWBrowser?
@@ -60,8 +60,17 @@ public final class Viewer: @unchecked Sendable {
     private var hostChanged = false
     private var joinedAt: Date?
 
-    public init(identity: Identity) {
+    /// `reach` defaults to the network the devices are already on. See `Reach`
+    /// for what asking for peer-to-peer costs everyone else in the room.
+    public init(identity: ViewerIdentity, reach: Reach = .infrastructure) {
         self.identity = identity
+        self.reach = reach
+    }
+
+    /// The listener this identity can speak to. See `Bonjour.keyType`.
+    private var serviceType: String {
+        if case .key = identity { return Bonjour.keyType }
+        return Bonjour.type
     }
 
     /// Idempotent, and specifically valid from `.failed`: a refused join is not
@@ -73,8 +82,8 @@ public final class Viewer: @unchecked Sendable {
         guard !alreadyConnected else { return }
         if browser == nil {
             let parameters = NWParameters()
-            parameters.includePeerToPeer = true
-            let browser = NWBrowser(for: .bonjourWithTXTRecord(type: Bonjour.type, domain: nil),
+            parameters.includePeerToPeer = reach == .peerToPeer
+            let browser = NWBrowser(for: .bonjourWithTXTRecord(type: serviceType, domain: nil),
                                     using: parameters)
             browser.browseResultsChangedHandler = { [weak self] results, _ in
                 self?.absorb(results)
@@ -98,7 +107,8 @@ public final class Viewer: @unchecked Sendable {
 
     /// `token` is a fresh random per attempt and is not an identity: it is
     /// committed to in `hello` and revealed afterwards, and that is all it is
-    /// for. What identifies this viewer is its certificate.
+    /// for. What identifies this viewer is its `ViewerIdentity` — a
+    /// certificate, or a bare key.
     public func join(_ host: DiscoveredHost, token: UUID, name: String) {
         leave(quietly: true)
         self.token = token
@@ -109,7 +119,7 @@ public final class Viewer: @unchecked Sendable {
 
         queue.async { [self] in
             // The socket first: its port has to be in the hello.
-            guard let inbound = try? InboundMedia(), let port = inbound.start() else {
+            guard let inbound = try? InboundMedia(reach: reach), let port = inbound.start() else {
                 return set(.failed("no UDP port"))
             }
             media = inbound
@@ -117,19 +127,28 @@ public final class Viewer: @unchecked Sendable {
             inbound.onPacket = { [weak self] packet in self?.onPacket?(packet) }
             inbound.onClosed = { [weak self] in self?.fail("the media lane closed") }
 
-            let endpoint = NWEndpoint.service(name: host.serviceName, type: Bonjour.type,
+            let endpoint = NWEndpoint.service(name: host.serviceName, type: serviceType,
                                               domain: "local.", interface: nil)
             let connection = NWConnection(to: endpoint,
-                                          using: TLS.parameters(identity: identity, requirePeer: false,
-                                                                queue: queue))
+                                          using: TLS.parameters(identity: identity.secIdentity, requirePeer: false,
+                                                                reach: reach, queue: queue))
             let lane = ControlLane(connection: connection, queue: queue)
             control = lane
             lane.onReady = { [weak self] fingerprint in
                 guard let self else { return }
+                // A host is always a certificate: it is what the code is
+                // computed over and what gets pinned. None is not a host.
+                guard let fingerprint else { return fail("the host presented no certificate") }
                 hostFingerprint = fingerprint
                 hostChanged = Self.known(host.name).map { $0 != fingerprint.hexString } ?? false
-                lane.send(Packet.encodeHello(commitment: Pairing.commitment(for: token),
-                                             udpPort: port, name: displayName))
+                let commitment = Pairing.commitment(for: token)
+                switch identity {
+                case .certificate:
+                    lane.send(Packet.encodeHello(commitment: commitment, udpPort: port, name: displayName))
+                case .key(let key):
+                    lane.send(Packet.encodeHelloKey(publicKey: key.publicKey.x963Representation,
+                                                    commitment: commitment, udpPort: port, name: displayName))
+                }
             }
             lane.onMessage = { [weak self] message in self?.handle(message, port: port) }
             lane.onClosed = { [weak self] in
@@ -188,8 +207,19 @@ public final class Viewer: @unchecked Sendable {
         case .hostNonce(let nonce):
             guard let host = target else { return }
             // Reveal only now: the host's contribution is fixed, so neither
-            // side got to choose its half after seeing the other's.
-            control?.send(Packet.encodeReveal(token: token))
+            // side got to choose its half after seeing the other's. A key
+            // identity signs the host's nonce here — the proof of possession
+            // that TLS gave a certificate for free.
+            switch identity {
+            case .certificate:
+                control?.send(Packet.encodeReveal(token: token))
+            case .key(let key):
+                let proof = Pairing.proof(hostNonce: nonce, hostFingerprint: hostFingerprint, token: token)
+                guard let signature = try? key.signature(for: proof) else {
+                    return fail("could not sign the pairing proof")
+                }
+                control?.send(Packet.encodeRevealSigned(token: token, signature: signature))
+            }
             let code = Pairing.code(hostFingerprint: hostFingerprint,
                                     viewerFingerprint: identity.fingerprint,
                                     token: token, hostNonce: nonce)

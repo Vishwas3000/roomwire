@@ -295,6 +295,11 @@ enum PacketVectors {
     static let viewerFp = Data(repeating: 0x22, count: 32)
     static let hostNonce = Data((0x50 ..< 0x60).map(UInt8.init))
     static var commitment: Data { Pairing.commitment(for: token) }
+    /// A key-shaped fixture, not a key: X9.63 is 0x04 then x then y, and the
+    /// decoder checks the shape. Whether the point is on the curve is the
+    /// transport's business, when it builds a `P256.Signing.PublicKey`.
+    static let viewerKey = Data([0x04]) + Data((0x60 ..< 0xA0).map(UInt8.init))
+    static let signature = Data((0xA0 ..< 0xE0).map(UInt8.init))           // a0…df, 64 bytes
 
     static func transport() {
         // hello commits to a token rather than carrying it: the viewer speaks
@@ -322,6 +327,17 @@ enum PacketVectors {
                                                hostFingerprint: Data((0x40 ..< 0x60).map(UInt8.init))))
         encode("hostNonce", Packet.encodeHostNonce(hostNonce))
         encode("reveal", Packet.encodeReveal(token: token))
+        // A viewer with no certificate says who it is with a public key, and
+        // proves it holds the key by signing the host's nonce. Same name rules
+        // as hello, one field along.
+        encode("helloKey", Packet.encodeHelloKey(publicKey: viewerKey, commitment: commitment,
+                                                 udpPort: 0xC001, name: "Ada’s iPhone"))
+        encode("helloKey.longName", Packet.encodeHelloKey(publicKey: viewerKey, commitment: commitment,
+                                                          udpPort: 1, name: String(repeating: "n", count: 63)))
+        encode("revealSigned", Packet.encodeRevealSigned(token: token, signature: signature))
+        // The 64 bytes that signature is over, frozen so both ends sign the
+        // same thing: hostNonce ‖ hostFingerprint ‖ token.
+        encode("pairing.proof", Pairing.proof(hostNonce: hostNonce, hostFingerprint: hostFp, token: token))
     }
 
     // MARK: - The media lane's header and envelope, the pairing code, the control lane's framing
@@ -489,6 +505,17 @@ enum PacketVectors {
         reject("hello.port0", Data([19]) + Data(repeating: 0x0F, count: 32) + Data([0, 0, 1, 0x6E]))
         reject("hello.short", helloHead)
 
+        // helloKey: the same refusals as hello, plus a key that is not the
+        // uncompressed X9.63 shape this protocol speaks.
+        let keyHead = Data([30]) + viewerKey + Data(repeating: 0x0F, count: 32) + Data([0xC0, 0x01])
+        reject("helloKey.emptyName", keyHead + Data([0]))
+        reject("helloKey.nameTooLong", keyHead + Data([64]) + Data(repeating: 0x6E, count: 64))
+        reject("helloKey.badUtf8", keyHead + Data([2, 0xFF, 0xFE]))
+        reject("helloKey.lengthDisagrees", keyHead + Data([5]) + Data(repeating: 0x6E, count: 6))
+        reject("helloKey.port0", Data([30]) + viewerKey + Data(repeating: 0x0F, count: 32) + Data([0, 0, 1, 0x6E]))
+        reject("helloKey.compressedKey", Data([30, 0x02]) + viewerKey.dropFirst() + Data(repeating: 0x0F, count: 32) + Data([0xC0, 0x01, 1, 0x6E]))
+        reject("helloKey.short", keyHead)
+
         // A welcome is exactly 67 bytes, and the host's port dials somewhere too.
         let welcome = Packet.encodeWelcome(udpPort: 0xD002, mediaKey: mediaKey, hostFingerprint: hostFp)
         reject("welcome.short", welcome.prefix(66))
@@ -496,6 +523,11 @@ enum PacketVectors {
         var welcomePort0 = welcome
         welcomePort0[1] = 0; welcomePort0[2] = 0
         reject("welcome.port0", welcomePort0)
+
+        // A signed reveal is exactly 81 bytes: id, token, r ‖ s.
+        let signed = Packet.encodeRevealSigned(token: token, signature: signature)
+        reject("revealSigned.short", signed.prefix(80))
+        reject("revealSigned.long", signed + Data([0]))
 
         // The media header: a count of 0 describes nothing, an index must fall
         // inside the count, 512 slices is the cap, a kind we do not know is not
@@ -727,6 +759,10 @@ enum PacketVectors {
             return Packet.encodeWelcome(udpPort: port, mediaKey: key, hostFingerprint: fingerprint)
         case .hostNonce(let nonce): return Packet.encodeHostNonce(nonce)
         case .reveal(let token): return Packet.encodeReveal(token: token)
+        case .helloKey(let key, let commitment, let port, let name):
+            return Packet.encodeHelloKey(publicKey: key, commitment: commitment, udpPort: port, name: name)
+        case .revealSigned(let token, let signature):
+            return Packet.encodeRevealSigned(token: token, signature: signature)
         }
     }
 

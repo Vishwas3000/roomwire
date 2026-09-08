@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 import Network
-import RoomWireMedia
+import RoomWireLink
 import RoomWireProtocol
 
 /// The host's end of one viewer's media lane: a single outbound UDP flow,
@@ -34,8 +34,8 @@ final class OutboundMedia {
     private var nextFrame: UInt32 = 0
     private var closed = false
 
-    init(to host: NWEndpoint.Host, port: NWEndpoint.Port, key: SymmetricKey, queue: DispatchQueue) {
-        connection = NWConnection(to: .hostPort(host: host, port: port), using: MediaParameters.udp())
+    init(to host: NWEndpoint.Host, port: NWEndpoint.Port, key: SymmetricKey, queue: DispatchQueue, reach: Reach) {
+        connection = NWConnection(to: .hostPort(host: host, port: port), using: MediaParameters.udp(reach: reach))
         self.queue = queue
         sealer = MediaSeal.Sealer(key: key, role: .host)
         opener = MediaSeal.Opener(key: key, role: .host)

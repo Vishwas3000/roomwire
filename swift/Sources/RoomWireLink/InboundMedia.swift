@@ -10,9 +10,9 @@ import RoomWireProtocol
 /// iOS build links without swift-certificates/BoringSSL, while the control
 /// lane's mutual TLS stays quarantined in RoomWireTransport (macOS only).
 public enum MediaParameters {
-    public static func udp() -> NWParameters {
+    public static func udp(reach: Reach = .infrastructure) -> NWParameters {
         let parameters = NWParameters(dtls: nil, udp: NWProtocolUDP.Options())
-        parameters.includePeerToPeer = true
+        parameters.includePeerToPeer = reach == .peerToPeer
         return parameters
     }
 }
@@ -52,8 +52,8 @@ public final class InboundMedia {
     private var expectedPort: UInt16?
     private var closed = false
 
-    public init() throws {
-        listener = try NWListener(using: MediaParameters.udp())
+    public init(reach: Reach = .infrastructure) throws {
+        listener = try NWListener(using: MediaParameters.udp(reach: reach))
     }
 
     /// The port to advertise in `hello`. Blocks the calling thread until the

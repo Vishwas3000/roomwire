@@ -31,7 +31,7 @@ class PacketVectorsTest {
         }
         // A short read must fail loudly rather than report a green suite over
         // half the format.
-        assertEquals(233, rows.size, "expected 233 vectors, parsed ${rows.size}")
+        assertEquals(246, rows.size, "expected 246 vectors, parsed ${rows.size}")
 
         return rows.map { (name, verdict, hex) ->
             DynamicTest.dynamicTest("$verdict $name") { check(name, verdict, unhex(hex)) }
@@ -131,6 +131,8 @@ class PacketVectorsTest {
             is Packet.Message.Welcome -> Packet.encodeWelcome(m.udpPort, m.mediaKey, m.hostFingerprint)
             is Packet.Message.HostNonce -> Packet.encodeHostNonce(m.nonce)
             is Packet.Message.Reveal -> Packet.encodeReveal(m.token)
+            is Packet.Message.HelloKey -> Packet.encodeHelloKey(m.publicKey, m.commitment, m.udpPort, m.name)
+            is Packet.Message.RevealSigned -> Packet.encodeRevealSigned(m.token, m.signature)
         }
     }
 
@@ -354,6 +356,12 @@ class PacketVectorsTest {
         "welcome" -> Packet.encodeWelcome(0xD002u, mediaKey, ByteArray(32) { (0x40 + it).toByte() })
         "hostNonce" -> Packet.encodeHostNonce(hostNonce)
         "reveal" -> Packet.encodeReveal(token)
+        // A viewer with no certificate: a key-shaped fixture, and the 64 bytes
+        // its signature is over. Same name rules as hello, one field along.
+        "helloKey" -> Packet.encodeHelloKey(viewerKey, commitment, 0xC001u, "Ada’s iPhone")
+        "helloKey.longName" -> Packet.encodeHelloKey(viewerKey, commitment, 1u, "n".repeat(63))
+        "revealSigned" -> Packet.encodeRevealSigned(token, signature)
+        "pairing.proof" -> Pairing.proof(hostNonce, proofHostFp, token)
 
         "chunk.video" -> ChunkHeader.encode(videoFields)
         "chunk.message" -> ChunkHeader.encode(messageFields)
@@ -404,6 +412,9 @@ class PacketVectorsTest {
             return UUID(buf.long, buf.long)
         }
         val mediaKey = ByteArray(32) { it.toByte() }
+        val viewerKey = byteArrayOf(0x04) + ByteArray(64) { (0x60 + it).toByte() }
+        val signature = ByteArray(64) { (0xA0 + it).toByte() }
+        val proofHostFp = ByteArray(32) { 0x11 }
 
         /** The two hashes an offer carries, matching PacketVectors.swift. */
         val headHash = ByteArray(32) { (0xA0 + it).toByte() }
